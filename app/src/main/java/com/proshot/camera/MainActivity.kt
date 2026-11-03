@@ -3,14 +3,17 @@ package com.proshot.camera
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.media.MediaActionSound
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Size
 import android.view.Gravity
@@ -18,6 +21,7 @@ import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.OrientationEventListener
+import android.view.ScaleGestureDetector
 import android.view.TextureView
 import android.view.View
 import android.view.ViewOutlineProvider
@@ -27,8 +31,12 @@ import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import com.proshot.detail.Scene
+import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.ln
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -38,6 +46,8 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private lateinit var preview: AutoFitTextureView
     private lateinit var grid: GridView
     private lateinit var focusRing: FocusRingView
+    private lateinit var faceBox: FaceBoxView
+    private lateinit var chipAuto: TextView
     private lateinit var lensBar: LinearLayout
     private lateinit var liveText: TextView
     private lateinit var statusText: TextView
@@ -81,6 +91,40 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private var lastUri: Uri? = null
     private var wbModes: List<Pair<Int, String>> = emptyList()
 
+    // Zoom: totalZoom is relative to the main lens (1x = 35 mm equivalent).
+    private var totalZoom = 1f
+    private var mainEquiv = 24
+    private var scaling = false
+    private var lastPinchEnd = 0L
+    private var selLensView: TextView? = null
+
+    // Tap-to-focus extras.
+    private var ringX = 0f
+    private var ringY = 0f
+    private var evArmed = false
+    private var evDragging = false
+    private var evStart = 0
+
+    // Smart auto.
+    private var smartOn = true
+    private var autoStackActive = false
+    private var autoHoldUntil = 0L
+    private val smartBmp: Bitmap = Bitmap.createBitmap(SMART_W, SMART_H, Bitmap.Config.ARGB_8888)
+    private val smartPx = IntArray(SMART_W * SMART_H)
+    private val smartRunnable = object : Runnable {
+        override fun run() {
+            if (smartOn && opened && !shooting && !ms.manualExposure && preview.isAvailable) {
+                val stats = runCatching {
+                    preview.getBitmap(smartBmp)
+                    smartBmp.getPixels(smartPx, 0, SMART_W, 0, 0, SMART_W, SMART_H)
+                    Scene.stats(smartPx)
+                }.getOrNull()
+                engine.smartTick(stats)
+            }
+            preview.postDelayed(this, 700)
+        }
+    }
+
     private val hideStatus = Runnable { statusText.visibility = View.GONE }
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -96,6 +140,8 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         preview = findViewById(R.id.preview)
         grid = findViewById(R.id.grid)
         focusRing = findViewById(R.id.focusRing)
+        faceBox = findViewById(R.id.faceBox)
+        chipAuto = findViewById(R.id.chipAuto)
         lensBar = findViewById(R.id.lensBar)
         liveText = findViewById(R.id.liveText)
         statusText = findViewById(R.id.statusText)
@@ -160,14 +206,48 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
 
         val gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent) = true
+            override fun onDown(e: MotionEvent): Boolean {
+                evDragging = false
+                val l = current
+                val evOk = l != null && QualityProfile.evRange(l.chars).let { it.upper > it.lower }
+                evArmed = evOk && !ms.manualExposure && focusRing.active &&
+                    hypot(e.x - ringX, e.y - ringY) < dp(90)
+                evStart = ms.evSteps
+                return true
+            }
 
             override fun onSingleTapUp(e: MotionEvent): Boolean {
-                tapFocus(e.x, e.y)
+                tapFocus(e.x, e.y, false)
+                return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (scaling || evDragging) return
+                preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                tapFocus(e.x, e.y, true)
+                status("AE/AF заблоковано — тапни, щоб розблокувати")
+            }
+
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+                val start = e1 ?: return false
+                if (!evArmed || scaling) return false
+                val l = current ?: return false
+                if (!evDragging) {
+                    val moveY = abs(e2.y - start.y)
+                    if (moveY < dp(12) || moveY < abs(e2.x - start.x)) return false
+                    evDragging = true
+                }
+                val range = QualityProfile.evRange(l.chars)
+                val perEv = dp(70).toFloat()
+                val evDelta = (start.y - e2.y) / perEv
+                val steps = (evStart + evDelta / QualityProfile.evStepSize(l.chars)).roundToInt()
+                    .coerceIn(range.lower, range.upper)
+                setEv(steps, true)
                 return true
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                if (scaling || evDragging || SystemClock.uptimeMillis() - lastPinchEnd < 350) return false
                 if (abs(vx) > abs(vy) && abs(vx) > 800f) {
                     switchMode(if (vx < 0) 1 else -1)
                     return true
@@ -175,7 +255,41 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 return false
             }
         })
-        preview.setOnTouchListener { _, ev -> gestures.onTouchEvent(ev) }
+
+        val scaler = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+                if (fullRes && fmt != 3) {
+                    status("Для зуму вимкни FULL (50 МП)", false)
+                    return false
+                }
+                scaling = true
+                return true
+            }
+
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                val l = current ?: return false
+                val (lo, hi) = zoomRange()
+                totalZoom = (totalZoom * d.scaleFactor).coerceIn(lo, hi)
+                applyDigital(l)
+                return true
+            }
+
+            override fun onScaleEnd(d: ScaleGestureDetector) {
+                scaling = false
+                lastPinchEnd = SystemClock.uptimeMillis()
+                settleLens()
+            }
+        })
+
+        preview.setOnTouchListener { _, ev ->
+            scaler.onTouchEvent(ev)
+            gestures.onTouchEvent(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                evArmed = false
+                evDragging = false
+            }
+            true
+        }
 
         btnShutter.setOnClickListener { shutter() }
         btnFlip.setOnClickListener { flipCamera() }
@@ -183,6 +297,13 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chipFormat.setOnClickListener { cycleFormat() }
         chipRes.setOnClickListener { toggleRes() }
         chipWb.setOnClickListener { cycleWb() }
+        chipAuto.setOnClickListener {
+            smartOn = !smartOn
+            engine.setSmart(smartOn)
+            if (!smartOn) revertAutoStack()
+            refreshToggles()
+            status(if (smartOn) "AUTO: експозиція і стек підлаштовуються під сцену" else "AUTO вимкнено")
+        }
         chipGrid.setOnClickListener {
             gridOn = !gridOn
             grid.show = gridOn
@@ -204,9 +325,12 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             startUp()
         }
         refreshThumb()
+        preview.removeCallbacks(smartRunnable)
+        preview.postDelayed(smartRunnable, 1500)
     }
 
     override fun onPause() {
+        preview.removeCallbacks(smartRunnable)
         orientationListener.disable()
         opened = false
         engine.pause()
@@ -232,30 +356,53 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 return
             }
             current = lenses.firstOrNull { !it.front && it.equivMm in 22..44 } ?: lenses.first()
+            mainEquiv = lenses.firstOrNull { !it.front && it.equivMm in 22..44 }?.equivMm
+                ?: lenses.firstOrNull { !it.front && it.equivMm > 0 }?.equivMm ?: 24
         }
         opened = true
-        applyLens(current ?: lenses.first())
+        applyLens(current ?: lenses.first(), totalZoom)
     }
 
     // ---------------------------------------------------------------- lenses
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun ratioOf(l: Lens): Float = if (l.front || l.equivMm <= 0) 1f else l.equivMm.toFloat() / mainEquiv
+
+    private fun digitalMax(l: Lens) = QualityProfile.maxDigitalZoom(l.chars)
+
+    private fun zoomText(r: Float): String =
+        if (r < 0.95f) ".${(r * 10).roundToInt()}" else String.format(Locale.US, "%.1f", r).removeSuffix(".0")
+
+    /** Lowest and highest total zoom reachable with the lenses on the current side (digital zoom capped at 4x). */
+    private fun zoomRange(): Pair<Float, Float> {
+        val cur = current ?: return 1f to 1f
+        val group = lenses.filter { it.front == cur.front }.ifEmpty { listOf(cur) }
+        return group.minOf { ratioOf(it) } to group.maxOf { ratioOf(it) * min(digitalMax(it), 4f) }
+    }
+
     private fun buildLensBar() {
         lensBar.removeAllViews()
+        selLensView = null
         val cur = current ?: return
         for (l in lenses.filter { it.front == cur.front }) {
             val sel = l === cur
-            val num = if (l.equivMm > 0) l.equivMm.toString() else "?"
             val tv = TextView(this).apply {
                 gravity = Gravity.CENTER
-                text = if (sel) "$num\nmm" else num
-                textSize = if (sel) 12f else 10f
-                setLineSpacing(0f, 0.85f)
+                text = if (sel) "${zoomText(totalZoom)}×" else zoomText(ratioOf(l))
+                textSize = if (sel) 13f else 11f
                 setTextColor(if (sel) Color.WHITE else 0xFFDDDDDD.toInt())
                 setBackgroundResource(if (sel) R.drawable.lens_selected else R.drawable.lens_dot)
-                setOnClickListener { if (!sel) applyLens(l) }
+                setOnClickListener {
+                    if (sel) {
+                        totalZoom = ratioOf(l)
+                        applyDigital(l)
+                    } else {
+                        applyLens(l, ratioOf(l))
+                    }
+                }
             }
+            if (sel) selLensView = tv
             val size = dp(if (sel) 48 else 36)
             lensBar.addView(tv, LinearLayout.LayoutParams(size, size).apply {
                 marginStart = dp(7)
@@ -264,9 +411,37 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
     }
 
-    private fun applyLens(l: Lens) {
+    /** Applies the part of [totalZoom] the current lens has to deliver digitally. */
+    private fun applyDigital(l: Lens) {
+        val z = (totalZoom / ratioOf(l)).coerceIn(1f, digitalMax(l))
+        if (z != ms.zoom) {
+            ms = ms.copy(zoom = z)
+            engine.update(ms)
+        }
+        selLensView?.text = "${zoomText(totalZoom)}×"
+    }
+
+    /** After a pinch: pick the lens whose own field of view is closest below the requested zoom. */
+    private fun settleLens() {
+        val cur = current ?: return
+        if (cur.front) return
+        val back = lenses.filter { !it.front && it.equivMm > 0 }
+        if (back.isEmpty()) return
+        val best = back.filter { ratioOf(it) <= totalZoom * 1.06f }.maxByOrNull { ratioOf(it) }
+            ?: back.minByOrNull { ratioOf(it) }
+        if (best != null && best !== cur) applyLens(best, totalZoom)
+    }
+
+    private fun applyLens(l: Lens, total: Float = ratioOf(l)) {
+        val changed = current !== l
         current = l
         if (!l.front) lastBack = l
+        totalZoom = maxOf(total, ratioOf(l))
+        if (autoStackActive) {
+            autoStackActive = false
+            if (fmt == 3) fmt = 0
+        }
+        faceBox.setBox(null)
         lensInfo.text = LensCatalog.describe(l)
 
         if (!l.supportsRaw && (fmt == 1 || fmt == 2)) fmt = 0
@@ -287,13 +462,14 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             iso = QualityProfile.isoRange(l.chars).let { 100.coerceIn(it.lower, it.upper) },
             exposureNs = QualityProfile.exposureRange(l.chars).let { 8_000_000L.coerceIn(it.lower, it.upper) },
             awbMode = wbModes.first().first,
+            zoom = (totalZoom / ratioOf(l)).coerceIn(1f, digitalMax(l)),
         )
         configureSeekbars(l)
         buildLensBar()
         refreshToggles()
         pushModes()
         engine.update(ms)
-        engine.open(l)
+        engine.open(l, changed)
     }
 
     private fun flipCamera() {
@@ -330,8 +506,14 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         applyMode((currentMode() + step).coerceIn(0, modes.size - 1))
     }
 
+    private fun userChoseMode() {
+        autoStackActive = false
+        autoHoldUntil = SystemClock.uptimeMillis() + 60_000L
+    }
+
     private fun applyMode(i: Int) {
         val l = current ?: return
+        userChoseMode()
         val before = fmt
         when (i) {
             0 -> {
@@ -363,6 +545,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     private fun cycleFormat() {
         val l = current ?: return
+        userChoseMode()
         val order = if (l.supportsRaw) listOf(0, 1, 2, 3) else listOf(0, 3)
         fmt = order[(order.indexOf(fmt) + 1) % order.size]
         refreshToggles()
@@ -381,6 +564,13 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             return
         }
         fullRes = !fullRes
+        if (fullRes && ms.zoom > 1f) {
+            // Digital zoom is not available in the full-resolution sensor mode.
+            totalZoom = ratioOf(l)
+            ms = ms.copy(zoom = 1f)
+            engine.update(ms)
+            buildLensBar()
+        }
         refreshToggles()
         pushModes()
         engine.reconfigure()
@@ -416,6 +606,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chipWb.text = wbModes.firstOrNull { it.first == ms.awbMode }?.second ?: "WB"
         chip(chipWb, ms.awbMode != CameraMetadata.CONTROL_AWB_MODE_AUTO)
         chip(chipGrid, gridOn)
+        chip(chipAuto, smartOn)
 
         val mode = currentMode()
         modes.forEachIndexed { i, tv ->
@@ -442,10 +633,23 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         engine.capture()
     }
 
-    private fun tapFocus(x: Float, y: Float) {
+    private fun tapFocus(x: Float, y: Float, lock: Boolean) {
         if (preview.width == 0 || preview.height == 0) return
-        engine.focusAt(x / preview.width, y / preview.height)
-        focusRing.show(preview.left + x, preview.top + y)
+        engine.focusAt(x / preview.width, y / preview.height, lock)
+        ringX = x
+        ringY = y
+        focusRing.show(preview.left + x, preview.top + y, lock)
+    }
+
+    /** Sets exposure compensation from the seekbar or from dragging after a tap. */
+    private fun setEv(steps: Int, fromDrag: Boolean) {
+        val l = current ?: return
+        ms = ms.copy(evSteps = steps)
+        val txt = String.format(Locale.US, "%+.1f", steps * QualityProfile.evStepSize(l.chars))
+        labelEv.text = "EV $txt"
+        seekEv.progress = steps - QualityProfile.evRange(l.chars).lower
+        engine.update(ms)
+        if (fromDrag) focusRing.keepAlive("EV $txt")
     }
 
     private fun refreshThumb() {
@@ -539,10 +743,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         })
         seekEv.setOnSeekBarChangeListener(onUser { p ->
             val l = current ?: return@onUser
-            val steps = p + QualityProfile.evRange(l.chars).lower
-            ms = ms.copy(evSteps = steps)
-            labelEv.text = String.format("EV %+.1f", steps * QualityProfile.evStepSize(l.chars))
-            engine.update(ms)
+            setEv(p + QualityProfile.evRange(l.chars).lower, false)
         })
         seekFocus.setOnSeekBarChangeListener(onUser { p ->
             val l = current ?: return@onUser
@@ -597,9 +798,67 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         btnShutter.alpha = if (busy) 0.45f else 1f
     }
 
+    override fun onFace(box: RectF?) {
+        if (box == null) {
+            faceBox.setBox(null)
+            return
+        }
+        val w = preview.width.toFloat()
+        val h = preview.height.toFloat()
+        faceBox.setBox(
+            RectF(
+                preview.left + box.left * w, preview.top + box.top * h,
+                preview.left + box.right * w, preview.top + box.bottom * h,
+            ),
+        )
+    }
+
+    private fun revertAutoStack() {
+        if (!autoStackActive) return
+        autoStackActive = false
+        if (fmt == 3) {
+            fmt = 0
+            refreshToggles()
+            pushModes()
+            engine.reconfigure()
+        }
+    }
+
+    override fun onSmartStack(wanted: Boolean) {
+        if (!smartOn || shooting || ms.manualExposure || SystemClock.uptimeMillis() < autoHoldUntil) return
+        if (wanted && fmt == 0 && !fullRes) {
+            fmt = 3
+            autoStackActive = true
+            refreshToggles()
+            pushModes()
+            engine.reconfigure()
+            status("Мало світла — авто СТЕК")
+        } else if (!wanted && autoStackActive) {
+            revertAutoStack()
+            status("Достатньо світла — звичайний кадр")
+        }
+    }
+
+    override fun onTooClose() {
+        val cur = current ?: return
+        if (cur.front) return
+        val own = QualityProfile.minFocusDiopters(cur.chars)
+        val closer = lenses
+            .filter { !it.front && it !== cur && ratioOf(it) < ratioOf(cur) }
+            .maxByOrNull { QualityProfile.minFocusDiopters(it.chars) } ?: return
+        if (QualityProfile.minFocusDiopters(closer.chars) <= own * 1.2f) return
+        status("Занадто близько — спробуй ${closer.equivMm} мм (фокусується ближче)")
+    }
+
     override fun onModesChanged() {
+        if (!engine.stack) autoStackActive = false
         fmt = if (engine.stack) 3 else if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
         fullRes = engine.fullRes
         refreshToggles()
+    }
+
+    private companion object {
+        const val SMART_W = 48
+        const val SMART_H = 64
     }
 }

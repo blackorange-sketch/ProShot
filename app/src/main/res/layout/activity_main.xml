@@ -60,6 +60,11 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <com.proshot.camera.FaceBoxView
+            android:id="@+id/faceBox"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
         <com.proshot.camera.FocusRingView
             android:id="@+id/focusRing"
             android:layout_width="match_parent"
@@ -76,6 +81,13 @@
             android:paddingVertical="3dp"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/chipAuto"
+            style="@style/Chip"
+            android:layout_gravity="top|end"
+            android:layout_margin="5dp"
+            android:text="AUTO" />
 
         <TextView
             android:id="@+id/statusText"

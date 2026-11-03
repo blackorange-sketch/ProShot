@@ -2,6 +2,7 @@ package com.proshot.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -20,9 +21,15 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
+import com.proshot.detail.Light
+import com.proshot.detail.SceneStats
+import com.proshot.detail.SmartController
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class CameraEngine(
     private val ctx: Context,
@@ -36,6 +43,12 @@ class CameraEngine(
         fun onBusy(busy: Boolean)
         /** The engine had to change a mode (e.g. dropped RAW) so the UI should refresh its toggles. */
         fun onModesChanged()
+        /** Main detected face as a box in 0..1 portrait preview coordinates, null when none. */
+        fun onFace(box: RectF?) {}
+        /** Smart auto's opinion on multi-frame stacking (sent every analysis tick). */
+        fun onSmartStack(wanted: Boolean) {}
+        /** The subject is closer than this lens can focus. */
+        fun onTooClose() {}
     }
 
     private val mgr = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -63,14 +76,42 @@ class CameraEngine(
     @Volatile private var afState: Int? = null
     private var frames = 0
 
+    // Smart auto: all of this is touched on the camera thread only.
+    private val smart = SmartController()
+    @Volatile private var smartAuto = true
+    private var lastIso = 0
+    private var lastExp = 0L
+    private var nearCount = 0
+    private var hintShown = 0L
+    private var meterSetAt = 0L
+    private var focusToken = 0
+    private var faceMissing = 0
+    private var faceFrames = 0
+    private var faceShown = false
+
+    private val autoRelease = Runnable {
+        if (!state.aeLock) releaseAfLock()
+    }
+
     private fun msg(text: String, ok: Boolean = true) = main.post { listener.onMessage(text, ok) }
 
     // ---------------------------------------------------------------- lifecycle
 
     @SuppressLint("MissingPermission")
-    fun open(target: Lens) {
-        state = state.copy(meter = null)
-        handler.post { closeInternal() }
+    fun open(target: Lens, newLens: Boolean = false) {
+        handler.post {
+            closeInternal()
+            handler.removeCallbacks(autoRelease)
+            state = state.copy(meter = null, faceMeter = null, aeLock = false)
+            frames = 0
+            faceMissing = 0
+            faceShown = false
+            nearCount = 0
+            if (newLens) {
+                smart.reset()
+                state = state.copy(smartEvSteps = 0)
+            }
+        }
         handler.postDelayed({
             lens = target
             try {
@@ -100,7 +141,7 @@ class CameraEngine(
 
     /** Re-creates the session for the current lens after a mode toggle. */
     fun reconfigure() {
-        lens?.let { open(it) }
+        handler.post { lens?.let { open(it) } }
     }
 
     fun pause() {
@@ -221,14 +262,173 @@ class CameraEngine(
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
             afState = result.get(CaptureResult.CONTROL_AF_STATE)
+            handleFaces(result)
             if (++frames % 8 != 0) return
             val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val focus = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
             if (iso != null) pipeline?.setIsoHint(iso)
             if (iso == null || exp == null) return
+            lastIso = iso
+            lastExp = exp
+            expireMeter()
+            checkTooClose(focus)
             val f = if (focus != null && focus > 0.01f) String.format("%.2fm", 1f / focus) else "∞"
-            main.post { listener.onLive("ISO $iso · ${QualityProfile.formatShutter(exp)} · $f") }
+            var text = "ISO $iso · ${QualityProfile.formatShutter(exp)} · $f"
+            if (smartAuto && !state.manualExposure) {
+                text += " · " + lightLabel(smart.light)
+                if (state.smartEvSteps != 0) {
+                    val step = lens?.let { QualityProfile.evStepSize(it.chars) } ?: 0.33f
+                    text += String.format(" %+.1fEV", state.smartEvSteps * step)
+                }
+            }
+            main.post { listener.onLive(text) }
+        }
+    }
+
+    private fun lightLabel(l: Light) = when (l) {
+        Light.BRIGHT -> "ЯСНО"
+        Light.NORMAL -> "НОРМА"
+        Light.DIM -> "СУТІНКИ"
+        Light.DARK -> "ТЕМНО"
+    }
+
+    /** A tap/face region is only kept for a while, then the camera meters the whole scene again. */
+    private fun expireMeter() {
+        if (state.meter != null && !state.aeLock && SystemClock.uptimeMillis() - meterSetAt > METER_TTL_MS) {
+            state = state.copy(meter = null)
+            startPreview()
+        }
+    }
+
+    /** Autofocus pinned at its nearest distance and still unfocused for ~2 s: the subject is too close. */
+    private fun checkTooClose(focus: Float?) {
+        val l = lens ?: return
+        val minF = QualityProfile.minFocusDiopters(l.chars)
+        val af = afState
+        val stuck = focus != null && minF > 0f && focus >= minF * 0.9f && state.focusDiopters == null &&
+            (af == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)
+        nearCount = if (stuck) nearCount + 1 else 0
+        val now = SystemClock.uptimeMillis()
+        if (nearCount >= 8 && now - hintShown > 20_000L) {
+            hintShown = now
+            main.post { listener.onTooClose() }
+        }
+    }
+
+    // ---------------------------------------------------------------- coordinates
+
+    /** The part of the active array the preview currently shows (the whole array without zoom). */
+    private fun viewRect(l: Lens): android.graphics.Rect? =
+        QualityProfile.cropRegion(l.chars, state.zoom)
+            ?: l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+
+    /** Portrait preview position (0..1) to a sensor position (0..1) inside [viewRect]. */
+    private fun portraitToSensor(l: Lens, nx: Float, ny: Float): Pair<Float, Float> =
+        when (l.chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90) {
+            90 -> ny to (1f - nx)
+            270 -> (1f - ny) to nx
+            180 -> (1f - nx) to (1f - ny)
+            else -> nx to ny
+        }
+
+    private fun sensorToPortrait(l: Lens, fx: Float, fy: Float): Pair<Float, Float> =
+        when (l.chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90) {
+            90 -> (1f - fy) to fx
+            270 -> fy to (1f - fx)
+            180 -> (1f - fx) to (1f - fy)
+            else -> fx to fy
+        }
+
+    // ---------------------------------------------------------------- faces
+
+    private fun handleFaces(result: TotalCaptureResult) {
+        val l = lens ?: return
+        if (!QualityProfile.faceDetectAvailable(l.chars)) return
+        val faces = result.get(CaptureResult.STATISTICS_FACES)
+        val best = faces?.filter { it.score >= 50 }?.maxByOrNull { it.bounds.width() * it.bounds.height() }
+        if (best == null) {
+            if (++faceMissing == 12) {
+                faceMissing = 12
+                if (state.faceMeter != null) {
+                    state = state.copy(faceMeter = null)
+                    startPreview()
+                }
+                if (faceShown) {
+                    faceShown = false
+                    main.post { listener.onFace(null) }
+                }
+            }
+            return
+        }
+        faceMissing = 0
+        val arr = l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val vr = viewRect(l) ?: return
+        val b = best.bounds
+        val fx0 = (b.left - vr.left).toFloat() / vr.width()
+        val fx1 = (b.right - vr.left).toFloat() / vr.width()
+        val fy0 = (b.top - vr.top).toFloat() / vr.height()
+        val fy1 = (b.bottom - vr.top).toFloat() / vr.height()
+        if (fx1 < 0f || fy1 < 0f || fx0 > 1f || fy0 > 1f) return
+
+        // Box for the overlay, throttled.
+        if (++faceFrames % 3 == 0) {
+            val (ax, ay) = sensorToPortrait(l, fx0, fy0)
+            val (bx, by) = sensorToPortrait(l, fx1, fy1)
+            val box = RectF(min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+            faceShown = true
+            main.post { listener.onFace(box) }
+        }
+
+        // The face drives AF/AE unless the user picked a point or manual focus is on.
+        if (state.meter != null || state.aeLock || state.focusDiopters != null) return
+        val cx = (b.centerX() - arr.left).coerceIn(0, arr.width())
+        val cy = (b.centerY() - arr.top).coerceIn(0, arr.height())
+        val rw = max((b.width() * 1.3f).toInt(), arr.width() / 12)
+        val rh = max((b.height() * 1.3f).toInt(), arr.height() / 12)
+        val x0 = (arr.left + cx - rw / 2).coerceIn(arr.left, max(arr.left, arr.right - rw))
+        val y0 = (arr.top + cy - rh / 2).coerceIn(arr.top, max(arr.top, arr.bottom - rh))
+        val old = state.faceMeter
+        val moved = old == null || abs(old.x - x0) > arr.width() * 0.05f || abs(old.y - y0) > arr.height() * 0.05f
+        if (moved) {
+            state = state.copy(faceMeter = MeteringRectangle(x0, y0, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX))
+            startPreview()
+        }
+    }
+
+    // ---------------------------------------------------------------- smart auto
+
+    fun setSmart(on: Boolean) {
+        handler.post {
+            smartAuto = on
+            if (!on) {
+                smart.reset()
+                state = state.copy(smartEvSteps = 0)
+                startPreview()
+                main.post { listener.onSmartStack(false) }
+            }
+        }
+    }
+
+    /** One analysis tick from the UI: [stats] of a small preview snapshot, or null. */
+    fun smartTick(stats: SceneStats?) {
+        handler.post {
+            if (!smartAuto || device == null) return@post
+            val l = lens ?: return@post
+            // Right after opening the preview is black; do not react to that.
+            val usable = if (frames >= 30 && lastIso > 0) stats else null
+            smart.update(usable, lastIso, lastExp)
+            if (!state.manualExposure) {
+                val step = QualityProfile.evStepSize(l.chars).coerceAtLeast(0.05f)
+                val range = QualityProfile.evRange(l.chars)
+                val steps = (smart.biasEv / step).roundToInt().coerceIn(range.lower, range.upper)
+                if (steps != state.smartEvSteps) {
+                    state = state.copy(smartEvSteps = steps)
+                    startPreview()
+                }
+            }
+            val wanted = smart.stackWanted
+            main.post { listener.onSmartStack(wanted) }
         }
     }
 
@@ -248,33 +448,44 @@ class CameraEngine(
     }
 
     fun update(newState: ManualState) {
-        state = newState.copy(meter = state.meter)
-        handler.post { startPreview() }
+        handler.post {
+            // Fields owned by the engine survive UI updates.
+            state = newState.copy(
+                meter = state.meter,
+                faceMeter = state.faceMeter,
+                aeLock = state.aeLock,
+                smartEvSteps = state.smartEvSteps,
+            )
+            startPreview()
+        }
     }
 
     /**
      * Tap-to-focus. [nx], [ny] are 0..1 positions inside the upright (portrait) preview; they are
-     * mapped back to sensor coordinates using the sensor orientation.
+     * mapped back to sensor coordinates using the sensor orientation and the current zoom crop.
+     * With [lock] the focus and exposure stay fixed until the next tap; otherwise continuous AF
+     * takes over again after a few seconds.
      */
-    fun focusAt(nx: Float, ny: Float) {
+    fun focusAt(nx: Float, ny: Float, lock: Boolean = false) {
         handler.post {
             val d = device ?: return@post
             val s = session ?: return@post
             val l = lens ?: return@post
             val surf = previewSurface ?: return@post
-            val arr = l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
-            val so = l.chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-            val (fx, fy) = when (so) {
-                90 -> ny to (1f - nx)
-                270 -> (1f - ny) to nx
-                180 -> (1f - nx) to (1f - ny)
-                else -> nx to ny
-            }
-            val rw = (arr.width() * 0.16f).toInt().coerceAtLeast(8)
-            val rh = (arr.height() * 0.16f).toInt().coerceAtLeast(8)
-            val x0 = ((arr.left + fx * arr.width()).toInt() - rw / 2).coerceIn(arr.left, arr.right - rw)
-            val y0 = ((arr.top + fy * arr.height()).toInt() - rh / 2).coerceIn(arr.top, arr.bottom - rh)
-            state = state.copy(meter = MeteringRectangle(x0, y0, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX))
+            val vr = viewRect(l) ?: return@post
+            val (fx, fy) = portraitToSensor(l, nx.coerceIn(0f, 1f), ny.coerceIn(0f, 1f))
+            val rw = (vr.width() * 0.16f).toInt().coerceAtLeast(8)
+            val rh = (vr.height() * 0.16f).toInt().coerceAtLeast(8)
+            val x0 = ((vr.left + fx * vr.width()).toInt() - rw / 2).coerceIn(vr.left, max(vr.left, vr.right - rw))
+            val y0 = ((vr.top + fy * vr.height()).toInt() - rh / 2).coerceIn(vr.top, max(vr.top, vr.bottom - rh))
+            handler.removeCallbacks(autoRelease)
+            state = state.copy(
+                meter = MeteringRectangle(x0, y0, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX),
+                faceMeter = null,
+                aeLock = false,
+            )
+            meterSetAt = SystemClock.uptimeMillis()
+            val token = ++focusToken
             if (state.focusDiopters == null && QualityProfile.minFocusDiopters(l.chars) > 0f) {
                 try {
                     val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
@@ -286,6 +497,17 @@ class CameraEngine(
                 }
             }
             startPreview()
+            if (lock) {
+                // Give AE a moment to settle on the new area, then freeze it.
+                handler.postDelayed({
+                    if (token == focusToken && state.meter != null && !state.aeLock) {
+                        state = state.copy(aeLock = true)
+                        startPreview()
+                    }
+                }, 700)
+            } else {
+                handler.postDelayed(autoRelease, AF_HOLD_MS)
+            }
         }
     }
 
@@ -307,7 +529,7 @@ class CameraEngine(
             val l = lens
             if (d == null || s == null || p == null || l == null || p.busy) return@post
             main.post { listener.onBusy(true) }
-            val needAf = state.focusDiopters == null && QualityProfile.minFocusDiopters(l.chars) > 0f
+            val needAf = state.focusDiopters == null && !state.aeLock && QualityProfile.minFocusDiopters(l.chars) > 0f
             if (needAf) focusThenShoot(d, s, p, l) else shoot(d, s, p, false)
         }
     }
@@ -360,5 +582,10 @@ class CameraEngine(
         } catch (_: Throwable) {
         }
         startPreview()
+    }
+
+    private companion object {
+        const val AF_HOLD_MS = 3000L
+        const val METER_TTL_MS = 10_000L
     }
 }

@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
@@ -35,7 +36,7 @@ class GridView @JvmOverloads constructor(
     }
 }
 
-/** Yellow ring that pops in where the user tapped to focus, then fades out. */
+/** Yellow ring that pops in where the user tapped to focus; shows EV while dragging and a lock label. */
 class FocusRingView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -47,17 +48,29 @@ class FocusRingView @JvmOverloads constructor(
         color = 0xFFFFD54F.toInt()
         strokeWidth = 2.5f * density
     }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFD54F.toInt()
+        textSize = 13f * density
+        isFakeBoldText = true
+        setShadowLayer(3f * density, 0f, 0f, 0xFF000000.toInt())
+    }
     private var cx = 0f
     private var cy = 0f
     private var scale = 1f
+    private var locked = false
+    private var evLabel: String? = null
 
     init {
         alpha = 0f
     }
 
-    fun show(x: Float, y: Float) {
+    val active: Boolean get() = alpha > 0.05f
+
+    fun show(x: Float, y: Float, lock: Boolean = false) {
         cx = x
         cy = y
+        locked = lock
+        evLabel = null
         animate().cancel()
         alpha = 1f
         ValueAnimator.ofFloat(1.5f, 1f).apply {
@@ -68,10 +81,52 @@ class FocusRingView @JvmOverloads constructor(
             }
             start()
         }
-        animate().alpha(0f).setStartDelay(1300).setDuration(300).start()
+        scheduleFade()
+    }
+
+    /** Keeps the ring on screen while the user drags for exposure compensation. */
+    fun keepAlive(ev: String?) {
+        evLabel = ev
+        animate().cancel()
+        alpha = 1f
+        invalidate()
+        scheduleFade()
+    }
+
+    private fun scheduleFade() {
+        if (!locked) animate().alpha(0f).setStartDelay(1500).setDuration(300).start()
     }
 
     override fun onDraw(c: Canvas) {
-        c.drawCircle(cx, cy, 36f * density * scale, paint)
+        val r = 36f * density * scale
+        c.drawCircle(cx, cy, r, paint)
+        evLabel?.let { c.drawText(it, cx + r + 8f * density, cy + 5f * density, text) }
+        if (locked) {
+            val label = "AE/AF LOCK"
+            c.drawText(label, cx - text.measureText(label) / 2f, cy + r + 18f * density, text)
+        }
+    }
+}
+
+/** Thin white box around the main face the camera is focusing on. */
+class FaceBoxView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+) : View(context, attrs) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = 0xCCFFFFFF.toInt()
+        strokeWidth = 1.5f * resources.displayMetrics.density
+    }
+    private var box: RectF? = null
+
+    fun setBox(r: RectF?) {
+        box = r
+        invalidate()
+    }
+
+    override fun onDraw(c: Canvas) {
+        box?.let { c.drawRoundRect(it, 8f, 8f, paint) }
     }
 }

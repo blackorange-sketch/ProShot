@@ -1,5 +1,6 @@
 package com.proshot.camera
 
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
@@ -18,6 +19,14 @@ data class ManualState(
     val awbMode: Int = CameraMetadata.CONTROL_AWB_MODE_AUTO,
     /** Tap-to-focus/meter area in sensor coordinates; null means the camera decides. */
     val meter: MeteringRectangle? = null,
+    /** Digital zoom relative to the lens' own field of view (1 = none). */
+    val zoom: Float = 1f,
+    /** AE lock requested by long-press (AF is held by the engine). */
+    val aeLock: Boolean = false,
+    /** Exposure bias in EV steps chosen by the smart auto mode, added to [evSteps]. */
+    val smartEvSteps: Int = 0,
+    /** Metering area around the main detected face, used when the user has not tapped. */
+    val faceMeter: MeteringRectangle? = null,
 )
 
 /**
@@ -114,7 +123,7 @@ object QualityProfile {
     fun applyManual(b: CaptureRequest.Builder, c: CameraCharacteristics, s: ManualState, forStill: Boolean) {
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
 
-        s.meter?.let { m ->
+        (s.meter ?: s.faceMeter)?.let { m ->
             if ((c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0) {
                 b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(m))
             }
@@ -131,7 +140,17 @@ object QualityProfile {
             b.set(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(exp, 33_333_333L))
         } else {
             b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-            b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, s.evSteps)
+            val ev = evRange(c)
+            b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, (s.evSteps + s.smartEvSteps).coerceIn(ev.lower, ev.upper))
+            if (s.aeLock && c.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) {
+                b.set(CaptureRequest.CONTROL_AE_LOCK, true)
+            }
+        }
+
+        cropRegion(c, s.zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
+
+        if (!forStill && faceDetectAvailable(c)) {
+            b.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CameraMetadata.STATISTICS_FACE_DETECT_MODE_SIMPLE)
         }
 
         if (c.list(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES).has(s.awbMode)) {
@@ -154,6 +173,27 @@ object QualityProfile {
             b.set(CaptureRequest.CONTROL_AF_MODE, mode)
         }
     }
+
+    /** Centered crop of the active array for digital zoom, or null when no zoom is needed. */
+    fun cropRegion(c: CameraCharacteristics, zoom: Float): Rect? {
+        if (zoom <= 1.001f) return null
+        val a = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+        val z = zoom.coerceIn(1f, maxDigitalZoom(c))
+        if (z <= 1.001f) return null
+        val w = (a.width() / z).toInt() and 1.inv()
+        val h = (a.height() / z).toInt() and 1.inv()
+        val x = a.left + (a.width() - w) / 2
+        val y = a.top + (a.height() - h) / 2
+        return Rect(x, y, x + w, y + h)
+    }
+
+    fun maxDigitalZoom(c: CameraCharacteristics): Float =
+        (c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f).coerceIn(1f, 6f)
+
+    fun faceDetectAvailable(c: CameraCharacteristics): Boolean =
+        c.list(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)
+            .has(CameraMetadata.STATISTICS_FACE_DETECT_MODE_SIMPLE) &&
+            (c.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0) > 0
 
     fun isoRange(c: CameraCharacteristics): Range<Int> =
         c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: Range(100, 800)
