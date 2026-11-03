@@ -60,6 +60,18 @@ object LensCatalog {
                 found.putIfAbsent(id, build(id, null, c, front))
             }
         }
+        // Some ROMs hide extra back cameras from the id list but still answer for them directly.
+        for (n in 0..9) {
+            val id = n.toString()
+            if (id in ids || found.containsKey(id)) continue
+            val c = runCatching { mgr.getCameraCharacteristics(id) }.getOrNull() ?: continue
+            if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
+            val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: continue
+            if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE)) continue
+            val lens = build(id, null, c, false)
+            if (lens.equivMm <= 0 || found.values.any { !it.front && it.equivMm == lens.equivMm }) continue
+            found[id] = lens
+        }
         return found.values.sortedWith(compareBy<Lens>({ it.front }, { it.equivMm }))
     }
 
@@ -123,6 +135,7 @@ object LensCatalog {
         append(" · стек ").append(LensProfiles.forLens(l).stackFrames).append("×\n")
         l.jpegSize?.let { append("JPEG ${it.width}x${it.height}") }
         l.maxResJpegSize?.let { append(" | FULL ${it.width}x${it.height}") }
+        append(" | AF-зон ").append(l.chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0)
         append(if (l.supportsRaw) " | RAW ${l.rawSize!!.width}x${l.rawSize.height}" else " | no RAW")
         l.maxResRawSize?.let { append(" | FULL RAW ${it.width}x${it.height}") }
     }

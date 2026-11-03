@@ -93,6 +93,16 @@ class CameraEngine(
         if (!state.aeLock) releaseAfLock()
     }
 
+    private fun afLabel(): String = when (afState) {
+        CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> "AF✓"
+        CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN,
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN -> "AF…"
+        CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> "AF✗"
+        else -> "AF"
+    }
+
     private fun msg(text: String, ok: Boolean = true) = main.post { listener.onMessage(text, ok) }
 
     // ---------------------------------------------------------------- lifecycle
@@ -102,7 +112,7 @@ class CameraEngine(
         handler.post {
             closeInternal()
             handler.removeCallbacks(autoRelease)
-            state = state.copy(meter = null, faceMeter = null, aeLock = false)
+            state = state.copy(meter = null, faceMeter = null, aeLock = false, afAuto = false)
             frames = 0
             faceMissing = 0
             faceShown = false
@@ -274,7 +284,7 @@ class CameraEngine(
             expireMeter()
             checkTooClose(focus)
             val f = if (focus != null && focus > 0.01f) String.format("%.2fm", 1f / focus) else "∞"
-            var text = "ISO $iso · ${QualityProfile.formatShutter(exp)} · $f"
+            var text = "ISO $iso · ${QualityProfile.formatShutter(exp)} · $f · ${afLabel()}"
             if (smartAuto && !state.manualExposure) {
                 text += " · " + lightLabel(smart.light)
                 if (state.smartEvSteps != 0) {
@@ -455,6 +465,7 @@ class CameraEngine(
                 faceMeter = state.faceMeter,
                 aeLock = state.aeLock,
                 smartEvSteps = state.smartEvSteps,
+                afAuto = state.afAuto,
             )
             startPreview()
         }
@@ -483,6 +494,8 @@ class CameraEngine(
                 meter = MeteringRectangle(x0, y0, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX),
                 faceMeter = null,
                 aeLock = false,
+                // Explicit single-shot AF follows the tapped region far more reliably than continuous AF.
+                afAuto = state.focusDiopters == null,
             )
             meterSetAt = SystemClock.uptimeMillis()
             val token = ++focusToken
@@ -537,6 +550,8 @@ class CameraEngine(
     private fun focusThenShoot(d: CameraDevice, s: CameraCaptureSession, p: Shooter, l: Lens) {
         val surf = previewSurface ?: return
         try {
+            state = state.copy(afAuto = true)
+            startPreview()
             val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(surf)
             QualityProfile.applyManual(b, l.chars, state, false)
@@ -569,6 +584,7 @@ class CameraEngine(
     }
 
     private fun releaseAfLock() {
+        state = state.copy(afAuto = false)
         val d = device ?: return
         val s = session ?: return
         val l = lens ?: return

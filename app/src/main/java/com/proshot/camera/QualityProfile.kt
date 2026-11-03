@@ -27,6 +27,8 @@ data class ManualState(
     val smartEvSteps: Int = 0,
     /** Metering area around the main detected face, used when the user has not tapped. */
     val faceMeter: MeteringRectangle? = null,
+    /** Single-shot AF (explicit trigger) instead of continuous AF: used after a tap and before a shot. */
+    val afAuto: Boolean = false,
 )
 
 /**
@@ -165,6 +167,7 @@ object QualityProfile {
         } else if (minFocus > 0f) {
             // Continuous-picture keeps a locked AF result through the still capture.
             val mode = when {
+                s.afAuto && afModes.has(CameraMetadata.CONTROL_AF_MODE_AUTO) -> CameraMetadata.CONTROL_AF_MODE_AUTO
                 afModes.has(CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
                     CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 afModes.has(CameraMetadata.CONTROL_AF_MODE_AUTO) -> CameraMetadata.CONTROL_AF_MODE_AUTO
