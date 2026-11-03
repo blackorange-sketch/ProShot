@@ -31,6 +31,8 @@ data class Lens(
     val sensor: String,
     /** True when the full-resolution sizes come from the normal stream map (as "high resolution" sizes), so no sensor pixel mode is needed. */
     val maxResDefaultMode: Boolean = false,
+    /** Full size is only declared as the sensor's max pixel array, with no stream map: the HAL may or may not accept it. */
+    val experimentalMaxRes: Boolean = false,
 ) {
     val supportsMaxRes: Boolean get() = maxResJpegSize != null
 }
@@ -111,6 +113,20 @@ object LensCatalog {
             }
         }
 
+        // nubia declares the 50 MP pixel array (8192x6144) but ships no stream map for it. Offer it as an
+        // experiment: the engine tries to open such a stream and falls back to the normal size if the HAL refuses.
+        var experimental = false
+        if (maxRes == null && Build.VERSION.SDK_INT >= 31) {
+            val px = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION)
+            val base = jpegSize?.let { it.width.toLong() * it.height } ?: 0L
+            if (px != null && px.width.toLong() * px.height > base * 2) {
+                maxRes = Size(px.width, px.height)
+                maxResRaw = Size(px.width, px.height)
+                maxResDefault = true
+                experimental = true
+            }
+        }
+
         val sensorName = when {
             front -> "OV16A"
             equiv in 10..17 -> "OV50D"
@@ -142,6 +158,7 @@ object LensCatalog {
             front = front,
             sensor = sensorName,
             maxResDefaultMode = maxResDefault,
+            experimentalMaxRes = experimental,
         )
     }
 
@@ -151,7 +168,7 @@ object LensCatalog {
         append(" [id ").append(l.physicalId ?: l.openId).append("]")
         append(" · стек ").append(LensProfiles.forLens(l).stackFrames).append("×\n")
         l.jpegSize?.let { append("JPEG ${it.width}x${it.height}") }
-        l.maxResJpegSize?.let { append(" | FULL ${it.width}x${it.height}") }
+        l.maxResJpegSize?.let { append(" | FULL ${it.width}x${it.height}${if (l.experimentalMaxRes) "?" else ""}") }
         append(" | AF-зон ").append(l.chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0)
         append(if (l.supportsRaw) " | RAW ${l.rawSize!!.width}x${l.rawSize.height}" else " | no RAW")
         l.maxResRawSize?.let { append(" | FULL RAW ${it.width}x${it.height}") }

@@ -15,6 +15,7 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -69,6 +70,10 @@ class CameraEngine(
     @Volatile var wantJpeg = true
     @Volatile var wantRaw = false
     @Volatile var fullRes = false
+    @Volatile private var skipCheckTried = false
+    /** Set when a session failed with the user's vendor keys enabled; they are skipped until changed in the dialog. */
+    @Volatile var vendorSuppressed = false
+    @Volatile private var useCaseOff = false
     /** With [fullRes]: shoot 50 MP and downscale 2x for a cleaner, more detailed 12 MP image. */
     @Volatile var superSample = false
     /** Multi-frame stacking mode (works at the binned resolution, so it overrides full-res). */
@@ -207,6 +212,9 @@ class CameraEngine(
                 listener.onMessage(text, ok)
             }
         }
+        val stillUc = !stack && !useCaseOff && hasUseCase(l, CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE) &&
+            hasUseCase(l, CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW)
+        val vendorNames = if (vendorSuppressed) emptyList() else VendorKeys.enabled(ctx)
         val still: Shooter = if (stack) {
             if (rawStack && RawStackPipeline.supported(l)) {
                 RawStackPipeline(ctx, l, handler, io, finished)
@@ -214,11 +222,17 @@ class CameraEngine(
                 StackPipeline(ctx, l, handler, io, finished)
             }
         } else {
-            StillPipeline(ctx, l, jpeg, raw, fullRes, superSample, handler, io, finished)
+            StillPipeline(ctx, l, jpeg, raw, fullRes, superSample, handler, io, finished, stillUc)
         }
 
         val previewCfg = OutputConfiguration(surface)
         l.physicalId?.let { previewCfg.setPhysicalCameraId(it) }
+        if (stillUc && Build.VERSION.SDK_INT >= 33) {
+            previewCfg.setStreamUseCase(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong())
+        }
+
+        if (!fullRes) skipCheckTried = false
+        val useSkipCheck = fullRes && !stack && l.experimentalMaxRes && skipCheckTried
 
         val sc = SessionConfiguration(
             SessionConfiguration.SESSION_REGULAR,
@@ -227,14 +241,26 @@ class CameraEngine(
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     session = s
+                    ShotLog.add(ctx, "SESSION OK $sessionInfo")
                     pipeline = still
                     startPreview()
-                    msg("${l.label}: ${still.describe()}")
+                    msg("${l.label}: ${still.describe()}" + (if (stillUc) " · use-case" else "") + vendorReport)
                 }
 
                 override fun onConfigureFailed(s: CameraCaptureSession) {
+                    ShotLog.add(ctx, "SESSION FAIL $sessionInfo")
                     still.close()
                     when {
+                        vendorNames.isNotEmpty() -> {
+                            vendorSuppressed = true
+                            msg("Камера відхилила vendor-параметри (${vendorNames.size}) — вимкнено до зміни в діалозі", false)
+                            reconfigure()
+                        }
+                        stillUc -> {
+                            useCaseOff = true
+                            msg("Камера відхилила stream use-case — працюю без нього", false)
+                            reconfigure()
+                        }
                         stack && rawStack -> {
                             rawStack = false
                             msg("RAW-стек не підтримується цим об'єктивом — звичайний STACK", false)
@@ -247,7 +273,13 @@ class CameraEngine(
                             main.post { listener.onModesChanged() }
                             reconfigure()
                         }
+                        fullRes && l.experimentalMaxRes && !skipCheckTried -> {
+                            skipCheckTried = true
+                            msg("50 МП: перша спроба не вдалася, пробую з параметром ZTE skip_stream_check…", false)
+                            reconfigure()
+                        }
                         fullRes -> {
+                            skipCheckTried = false
                             fullRes = false
                             superSample = false
                             msg("Full-res не підтримується цією комбінацією — стандартна роздільність", false)
@@ -265,6 +297,24 @@ class CameraEngine(
                 }
             },
         )
+        val names = vendorNames + (if (useSkipCheck) listOf(SKIP_CHECK) else emptyList())
+        vendorReport = ""
+        var accepted: Map<String, String> = emptyMap()
+        if (names.isNotEmpty()) {
+            val (req, ok) = VendorKeys.buildRequest(d, names)
+            req?.let { sc.setSessionParameters(it) }
+            accepted = ok.filterKeys { it != SKIP_CHECK }
+            if (vendorNames.isNotEmpty()) vendorReport = " · vendor ${accepted.size}/${vendorNames.size}"
+        }
+        val listed = runCatching { l.chars.availableSessionKeys?.map { it.name }.orEmpty() }.getOrDefault(emptyList())
+        val tag = listOfNotNull(
+            if (stillUc) "UC" else null,
+            if (accepted.isNotEmpty()) "V" + accepted.keys.joinToString("-") { VendorKeys.shortName(it) } else null,
+        ).joinToString("_")
+        (still as? StillPipeline)?.tag = tag
+        sessionInfo = "lens=${l.label} id=${l.physicalId ?: l.openId} fullRes=$fullRes stack=$stack useCase=$stillUc " +
+            "requested=${vendorNames.map { VendorKeys.shortName(it) }} accepted=${accepted.map { VendorKeys.shortName(it.key) + ":" + it.value }} " +
+            "inSessionKeys=${vendorNames.map { VendorKeys.shortName(it) + "=" + (it in listed) }} skipCheck=$useSkipCheck"
         try {
             d.createCaptureSession(sc)
         } catch (t: Throwable) {
@@ -272,6 +322,12 @@ class CameraEngine(
             msg("Помилка сесії: ${t.message}", false)
         }
     }
+
+    @Volatile private var vendorReport = ""
+    @Volatile private var sessionInfo = ""
+
+    private fun hasUseCase(l: Lens, uc: Int): Boolean = Build.VERSION.SDK_INT >= 33 &&
+        l.chars.get(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES)?.contains(uc.toLong()) == true
 
     private fun choosePreview(l: Lens, still: Size?): Size {
         val map = l.chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -620,3 +676,5 @@ class CameraEngine(
         const val METER_TTL_MS = 10_000L
     }
 }
+
+private const val SKIP_CHECK = "com.zte.camera.sessionParameters.skip_stream_check"

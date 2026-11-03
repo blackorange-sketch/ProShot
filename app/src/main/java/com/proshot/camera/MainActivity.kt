@@ -329,6 +329,24 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             refreshToggles()
             status("Якість JPEG ${Encoding.quality}: застосовується до оброблених режимів (DETAIL, СТЕК, RAW-STACK); камерний JPEG зберігається без змін")
         }
+        chipQ.setOnLongClickListener {
+            val keys = VendorKeys.all
+            val on = VendorKeys.enabled(this).toMutableSet()
+            val checked = BooleanArray(keys.size) { keys[it].name in on }
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Експерименти камери (vendor)")
+                .setMultiChoiceItems(keys.map { it.label }.toTypedArray(), checked) { _, i, c ->
+                    if (c) on += keys[i].name else on -= keys[i].name
+                }
+                .setPositiveButton("Застосувати") { _, _ ->
+                    VendorKeys.save(this, on)
+                    engine.vendorSuppressed = false
+                    engine.reconfigure()
+                }
+                .setNegativeButton("Скасувати", null)
+                .show()
+            true
+        }
         chipAuto.setOnClickListener {
             smartOn = !smartOn
             engine.setSmart(smartOn)

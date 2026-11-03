@@ -17,6 +17,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
+import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
 import com.proshot.detail.Finisher
@@ -39,6 +40,7 @@ class StillPipeline(
     private val handler: Handler,
     private val io: ExecutorService,
     private val onFinished: (message: String, ok: Boolean) -> Unit,
+    private val useCase: Boolean = false,
 ) : Shooter {
     private val maxRes = fullRes && lens.supportsMaxRes && (lens.maxResDefaultMode || Build.VERSION.SDK_INT >= 31)
 
@@ -79,7 +81,14 @@ class StillPipeline(
         ImageReader.newInstance(it.width, it.height, ImageFormat.RAW_SENSOR, depth)
     }
 
+    /** Active use-case / vendor-key tag, set by the engine once the session is configured; goes into the file name. */
+    @Volatile var tag = ""
+
     private class Job(val base: String, val orientation: Int) {
+        val t0 = SystemClock.elapsedRealtime()
+        var tCap = 0L
+        var stats = ""
+        var camBytes = 0
         var jpeg: Image? = null
         var raw: Image? = null
         var result: TotalCaptureResult? = null
@@ -112,6 +121,9 @@ class StillPipeline(
         if (maxRes && !lens.maxResDefaultMode && Build.VERSION.SDK_INT >= 31) {
             oc.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
         }
+        if (useCase && Build.VERSION.SDK_INT >= 33) {
+            oc.setStreamUseCase(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong())
+        }
         return oc
     }
 
@@ -138,7 +150,7 @@ class StillPipeline(
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        job = Job("PS_${stamp}_${lens.equivMm}mm_${modeTag}_o$orientation", orientation).also { it.state = state }
+        job = Job("PS_${stamp}_${lens.equivMm}mm_${modeTag}${if (tag.isNotEmpty()) "_$tag" else ""}_o$orientation", orientation).also { it.state = state }
         busy = true
         session.capture(b.build(), callback, handler)
     }
@@ -149,7 +161,7 @@ class StillPipeline(
         ) {
             afterCapture?.invoke()
             afterCapture = null
-            job?.let { it.result = result; tryFinish(it) }
+            job?.let { it.result = result; it.tCap = SystemClock.elapsedRealtime(); tryFinish(it) }
         }
 
         override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
@@ -187,6 +199,7 @@ class StillPipeline(
         j.jpeg?.let { img ->
             val buf = img.planes[0].buffer
             jpegBytes = ByteArray(buf.remaining()).also { buf.get(it) }
+            j.camBytes = jpegBytes!!.size
             jw = img.width
             jh = img.height
             runCatching { img.close() }
@@ -217,6 +230,11 @@ class StillPipeline(
                     parts += if (processed) (if (superSample) "JPEG SR" else "JPEG+") else "JPEG"
                 }
                 j.raw?.let { PhotoSaver.saveDng(ctx, lens.chars, result, it, j.orientation, j.base); parts += "DNG" }
+                ShotLog.add(
+                    ctx,
+                    "SHOT ${j.base} lens=${lens.label} cap=${j.tCap - j.t0}ms total=${SystemClock.elapsedRealtime() - j.t0}ms " +
+                        "camJpeg=${j.camBytes / 1024}KB ${j.stats} ${ShotLog.result(result)} | ${notes.joinToString("; ")}",
+                )
                 onFinished("Збережено ${parts.joinToString("+")}: ${j.base}" + (if (notes.isEmpty()) "" else " [${notes.joinToString("; ")}]"), true)
             } catch (t: Throwable) {
                 onFinished("Помилка збереження: ${t.message}", false)
@@ -242,6 +260,7 @@ class StillPipeline(
         val bmpW = bmp.width
         val frame = YuvConvert.fromBitmap(bmp)
         bmp.recycle()
+        j.stats = ShotLog.stats(frame)
         val (post, optics) = LensProfiles.postFor(lens, frame.width, frame.height)
         val finished = Finisher.run(frame, post)
         // This HAL already rotates the JPEG pixels itself (tag = 1, portrait dimensions), others leave the
