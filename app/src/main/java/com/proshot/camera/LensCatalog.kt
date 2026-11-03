@@ -82,9 +82,12 @@ object LensCatalog {
     private fun build(openId: String, physicalId: String?, c: CameraCharacteristics, front: Boolean): Lens {
         val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
         val sensor = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-        val equiv = if (sensor != null && focal > 0f) {
+        var equiv = if (sensor != null && focal > 0f) {
             (focal * 43.267f / hypot(sensor.width, sensor.height)).roundToInt()
         } else 0
+        // The Z50S Pro HAL reports the ultra-wide sensor as 2.4x1.8 mm (the binned pixel grid at 0.6 um, not the
+        // real ~4.8x3.6 mm), which made the 1.826 mm lens come out as "Main 26mm" and get the wrong profile.
+        if (!front && focal in 1.0f..2.2f && sensor != null && sensor.width < 3f) equiv = 13
 
         val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
