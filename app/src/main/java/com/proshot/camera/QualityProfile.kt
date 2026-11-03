@@ -210,6 +210,15 @@ object QualityProfile {
     fun evRange(c: CameraCharacteristics): Range<Int> =
         c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(0, 0)
 
+    /** Adds a lens-specific exposure bias (EV) on top of whatever compensation the request already carries. */
+    fun applyLensBias(b: CaptureRequest.Builder, c: CameraCharacteristics, biasEv: Float) {
+        if (biasEv == 0f || b.get(CaptureRequest.CONTROL_AE_MODE) != CameraMetadata.CONTROL_AE_MODE_ON) return
+        val ev = evRange(c)
+        val step = evStepSize(c).takeIf { it > 0f } ?: 0.33f
+        val cur = b.get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+        b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, (cur + Math.round(biasEv / step)).coerceIn(ev.lower, ev.upper))
+    }
+
     fun evStepSize(c: CameraCharacteristics): Float =
         c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0.33f
 

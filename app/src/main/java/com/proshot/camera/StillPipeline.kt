@@ -131,6 +131,7 @@ class StillPipeline(
         rawReader?.let { b.addTarget(it.surface) }
         QualityProfile.applyManual(b, lens.chars, state, true)
         QualityProfile.applyStill(b, lens.chars, LensProfiles.forLens(lens).stillNoiseReduction)
+        QualityProfile.applyLensBias(b, lens.chars, LensProfiles.forLens(lens).stillEvBias)
         if (maxRes && Build.VERSION.SDK_INT >= 31) {
             b.set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
         }

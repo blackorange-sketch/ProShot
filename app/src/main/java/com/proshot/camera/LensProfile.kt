@@ -25,6 +25,8 @@ data class LensProfile(
     val post: PostParams,
     /** Vignetting gain to apply only when the HAL does not do shading correction itself. */
     val vignetteIfUncorrected: Float = 0f,
+    /** Extra exposure compensation (EV) for single-frame and stacked stills, to match the stock camera's brightness. */
+    val stillEvBias: Float = 0f,
 )
 
 object LensProfiles {
@@ -42,7 +44,7 @@ object LensProfiles {
         stackFrames = 8,
         rawStackFrames = 12,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
-        post = PostParams(sharpenAmount = 0.95f, sharpenRadius = 1.0f, sharpenThreshold = 3, cornerBoost = 0.9f, chromaDenoise = 0.45f, clarity = 0.2f),
+        post = PostParams(sharpenAmount = 0.75f, sharpenRadius = 1.0f, sharpenThreshold = 5, cornerBoost = 0.9f, chromaDenoise = 0.45f, clarity = 0.15f),
         vignetteIfUncorrected = 0.25f,
     )
 
@@ -52,6 +54,7 @@ object LensProfiles {
         rawStackFrames = 14,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
         post = PostParams(sharpenAmount = 0.9f, sharpenRadius = 1.2f, sharpenThreshold = 4, cornerBoost = 0.1f, chromaDenoise = 0.6f, clarity = 0.2f),
+        stillEvBias = 0.4f,
     )
 
     private val FRONT = LensProfile(

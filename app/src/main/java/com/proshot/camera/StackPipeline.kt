@@ -92,6 +92,7 @@ class StackPipeline(
         QualityProfile.applyManual(b, lens.chars, state, true)
         QualityProfile.applyStill(b, lens.chars, profile.stillNoiseReduction)
         QualityProfile.applyStackFrame(b, lens.chars)
+        QualityProfile.applyLensBias(b, lens.chars, profile.stillEvBias)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         base = "PS_${stamp}_${lens.equivMm}mm_STACK${frameCount}_o$orientation"
