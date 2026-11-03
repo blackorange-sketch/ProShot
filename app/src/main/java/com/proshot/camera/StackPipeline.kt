@@ -176,7 +176,7 @@ class StackPipeline(
             val (post, optics) = LensProfiles.postFor(lens, merged.width, merged.height)
             val finished = Finisher.run(merged, post)
             val upright = YuvConvert.rotate(finished, orientation)
-            val jpeg = YuvConvert.toJpeg(upright, 100)
+            val jpeg = YuvConvert.toJpeg(upright, Encoding.quality)
             val engineName = if (StackerFactory.nativeAvailable) "C++" else "Kotlin"
             val meta = ShotMeta.from(
                 lens, lastResult, shotState,

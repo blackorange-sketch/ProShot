@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private lateinit var chipRes: TextView
     private lateinit var chipWb: TextView
     private lateinit var chipGrid: TextView
+    private lateinit var chipQ: TextView
     private lateinit var btnExpand: ImageView
     private lateinit var btnShutter: View
     private lateinit var btnFlip: ImageView
@@ -156,6 +157,8 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chipRes = findViewById(R.id.chipRes)
         chipWb = findViewById(R.id.chipWb)
         chipGrid = findViewById(R.id.chipGrid)
+        chipQ = findViewById(R.id.chipQ)
+        Encoding.quality = getSharedPreferences("proshot", MODE_PRIVATE).getInt("jpegQuality", 95)
         btnExpand = findViewById(R.id.btnExpand)
         btnShutter = findViewById(R.id.btnShutter)
         btnFlip = findViewById(R.id.btnFlip)
@@ -307,6 +310,12 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chipFormat.setOnClickListener { cycleFormat() }
         chipRes.setOnClickListener { toggleRes() }
         chipWb.setOnClickListener { cycleWb() }
+        chipQ.setOnClickListener {
+            Encoding.quality = when (Encoding.quality) { 95 -> 100; 100 -> 90; else -> 95 }
+            getSharedPreferences("proshot", MODE_PRIVATE).edit().putInt("jpegQuality", Encoding.quality).apply()
+            refreshToggles()
+            status("Якість JPEG ${Encoding.quality}: застосовується до оброблених режимів (DETAIL, СТЕК, RAW-STACK); камерний JPEG зберігається без змін")
+        }
         chipAuto.setOnClickListener {
             smartOn = !smartOn
             engine.setSmart(smartOn)
@@ -644,6 +653,8 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chipWb.text = wbModes.firstOrNull { it.first == ms.awbMode }?.second ?: "WB"
         chip(chipWb, ms.awbMode != CameraMetadata.CONTROL_AWB_MODE_AUTO)
         chip(chipGrid, gridOn)
+        chipQ.text = "Q${Encoding.quality}"
+        chip(chipQ, Encoding.quality == 100)
         chip(chipAuto, smartOn)
 
         val mode = currentMode()

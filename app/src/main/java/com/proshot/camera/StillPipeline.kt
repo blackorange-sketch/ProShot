@@ -178,24 +178,38 @@ class StillPipeline(
         if (rawReader != null && j.raw == null) return
         val result = j.result ?: return
         job = null
+
+        // Copy the camera JPEG out at once: the reader is freed and, without a DNG waiting, the next shot can
+        // start while this one is still being processed, encoded and written on the io thread.
+        var jpegBytes: ByteArray? = null
+        var jw = 0
+        var jh = 0
+        j.jpeg?.let { img ->
+            val buf = img.planes[0].buffer
+            jpegBytes = ByteArray(buf.remaining()).also { buf.get(it) }
+            jw = img.width
+            jh = img.height
+            runCatching { img.close() }
+            j.jpeg = null
+        }
+        val hasRaw = j.raw != null
+        if (!hasRaw) busy = false
+
         io.execute {
             try {
                 val parts = mutableListOf<String>()
                 val notes = mutableListOf<String>()
-                j.jpeg?.let {
+                jpegBytes?.let { bytes ->
                     var processed = false
                     var diag = ""
                     if (processJpeg) {
-                        val r = saveProcessed(it, j, result)
+                        val r = saveProcessed(bytes, jw, j, result)
                         processed = r.first
                         diag = r.second
                     }
                     if (!processed) {
-                        val buf = it.planes[0].buffer
-                        val bytes = ByteArray(buf.remaining())
-                        buf.get(bytes)
                         val sw = if (maxRes) "ProShot FULL" else "ProShot"
-                        val meta = ShotMeta.from(lens, result, j.state, sw, it.width, it.height)
+                        val meta = ShotMeta.from(lens, result, j.state, sw, jw, jh)
                         val sv = PhotoSaver.saveJpegStamped(ctx, bytes, j.base, null, meta) // keep the HAL's own orientation
                         diag += (if (diag.isNotEmpty()) " >> " else "") + "камерний JPEG ${sv.note}"
                     }
@@ -203,13 +217,13 @@ class StillPipeline(
                     parts += if (processed) (if (superSample) "JPEG SR" else "JPEG+") else "JPEG"
                 }
                 j.raw?.let { PhotoSaver.saveDng(ctx, lens.chars, result, it, j.orientation, j.base); parts += "DNG" }
-                busy = false
                 onFinished("Збережено ${parts.joinToString("+")}: ${j.base}" + (if (notes.isEmpty()) "" else " [${notes.joinToString("; ")}]"), true)
             } catch (t: Throwable) {
-                busy = false
                 onFinished("Помилка збереження: ${t.message}", false)
             } finally {
-                discard(j)
+                if (hasRaw) busy = false
+                runCatching { j.raw?.close() }
+                j.raw = null
             }
         }
     }
@@ -219,10 +233,7 @@ class StillPipeline(
      * frame), runs the detail library's finishing pass and saves the result. Returns false (plus a diagnostic text) on any
      * failure so the caller can save the untouched camera JPEG instead.
      */
-    private fun saveProcessed(img: Image, j: Job, result: TotalCaptureResult): Pair<Boolean, String> = try {
-        val buf = img.planes[0].buffer
-        val bytes = ByteArray(buf.remaining())
-        buf.get(bytes)
+    private fun saveProcessed(bytes: ByteArray, imgW: Int, j: Job, result: TotalCaptureResult): Pair<Boolean, String> = try {
         val opts = BitmapFactory.Options().apply {
             inSampleSize = if (superSample) 2 else 1
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -237,16 +248,16 @@ class StillPipeline(
         // pixels as captured and write an orientation tag. Whatever the tag still asks for is baked in here.
         val halTag = ExifInterface(ByteArrayInputStream(bytes))
         val deg = if (halTag.getAttribute(ExifInterface.TAG_ORIENTATION) == null) {
-            if (bmpW == img.width) j.orientation else 0
+            if (bmpW == imgW) j.orientation else 0
         } else {
             halTag.rotationDegrees
         }
         val upright = YuvConvert.rotate(finished, deg)
-        val jpeg = YuvConvert.toJpeg(upright, 100)
+        val jpeg = YuvConvert.toJpeg(upright, Encoding.quality)
         val sw = (if (superSample) "ProShot SUPER 50>12MP" else "ProShot DETAIL") + (if (optics) " + optics" else "")
         val meta = ShotMeta.from(lens, result, j.state, sw, upright.width, upright.height)
         val sv = PhotoSaver.saveJpegStamped(ctx, jpeg, j.base, 0, meta)
-        (sv.uri != null) to "px ${upright.width}x${upright.height} rot$deg ${sv.note}"
+        (sv.uri != null) to "px ${upright.width}x${upright.height} rot$deg q${Encoding.quality} ${sv.note}"
     } catch (t: Throwable) {
         false to "обробка не вдалася: ${t::class.java.simpleName} ${t.message}"
     }

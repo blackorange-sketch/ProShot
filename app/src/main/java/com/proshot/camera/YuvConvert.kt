@@ -7,6 +7,12 @@ import android.graphics.YuvImage
 import android.media.Image
 import com.proshot.detail.YuvFrame
 import java.io.ByteArrayOutputStream
+import java.util.stream.IntStream
+
+/** JPEG quality used when this app encodes a picture itself (the camera's own JPEGs are saved untouched). */
+object Encoding {
+    @Volatile var quality = 95
+}
 
 /** Conversions between camera Images, the stacking library's planar frames and JPEG bytes. */
 object YuvConvert {
@@ -48,11 +54,14 @@ object YuvConvert {
         val y = ByteArray(w * h)
         val u = ByteArray(w / 2 * (h / 2))
         val v = ByteArray(w / 2 * (h / 2))
-        val row0 = IntArray(w)
-        val row1 = IntArray(w)
-        for (r in 0 until h step 2) {
-            bmp.getPixels(row0, 0, w, 0, r, w, 1)
-            bmp.getPixels(row1, 0, w, 0, r + 1, w, 1)
+        IntStream.range(0, h / 2).parallel().forEach { br ->
+            val r = br * 2
+            val row0 = IntArray(w)
+            val row1 = IntArray(w)
+            synchronized(bmp) {
+                bmp.getPixels(row0, 0, w, 0, r, w, 1)
+                bmp.getPixels(row1, 0, w, 0, r + 1, w, 1)
+            }
             for (c in 0 until w step 2) {
                 var su = 0
                 var sv = 0
@@ -67,7 +76,7 @@ object YuvConvert {
                     su += ((-43 * rr - 85 * gg + 128 * bb + 128) shr 8) + 128
                     sv += ((128 * rr - 107 * gg - 21 * bb + 128) shr 8) + 128
                 }
-                val ci = (r / 2) * (w / 2) + c / 2
+                val ci = br * (w / 2) + c / 2
                 u[ci] = ((su + 2) / 4).coerceIn(0, 255).toByte()
                 v[ci] = ((sv + 2) / 4).coerceIn(0, 255).toByte()
             }
@@ -95,12 +104,12 @@ object YuvConvert {
     private fun rotatePlane(src: ByteArray, w: Int, h: Int, d: Int): ByteArray {
         val dst = ByteArray(src.size)
         when (d) {
-            90 -> for (yy in 0 until w) {
+            90 -> IntStream.range(0, w).parallel().forEach { yy ->
                 val row = yy * h
                 for (xx in 0 until h) dst[row + xx] = src[(h - 1 - xx) * w + yy]
             }
             180 -> for (i in src.indices) dst[i] = src[src.size - 1 - i]
-            else -> for (yy in 0 until w) {
+            else -> IntStream.range(0, w).parallel().forEach { yy ->
                 val row = yy * h
                 for (xx in 0 until h) dst[row + xx] = src[xx * w + (w - 1 - yy)]
             }

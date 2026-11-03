@@ -22,6 +22,10 @@
             style="@style/Chip" />
 
         <TextView
+            android:id="@+id/chipQ"
+            style="@style/Chip" />
+
+        <TextView
             android:id="@+id/chipWb"
             style="@style/Chip" />
 

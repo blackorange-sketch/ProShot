@@ -278,7 +278,7 @@ class RawStackPipeline(
             val (post, optics) = LensProfiles.postFor(lens, rendered.width, rendered.height)
             val finished = Finisher.run(rendered, post)
             val upright = YuvConvert.rotate(finished, orientation)
-            val jpeg = YuvConvert.toJpeg(upright, 100)
+            val jpeg = YuvConvert.toJpeg(upright, Encoding.quality)
             val shot = ShotMeta.from(
                 lens, r, shotState,
                 "ProShot RAW-STACK ${s.frames}x" + (if (optics) " + optics" else ""),
