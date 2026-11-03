@@ -6,16 +6,25 @@
         <item name="android:navigationBarColor">@android:color/black</item>
     </style>
 
-    <style name="ProToggle">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">36dp</item>
-        <item name="android:layout_weight">1</item>
+    <style name="Chip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">32dp</item>
         <item name="android:layout_marginHorizontal">3dp</item>
-        <item name="android:background">#333333</item>
+        <item name="android:background">@drawable/chip_bg</item>
         <item name="android:gravity">center</item>
+        <item name="android:paddingHorizontal">11dp</item>
         <item name="android:textColor">#FFFFFF</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="ModeLabel">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textSize">15sp</item>
     </style>
 
     <style name="ProRow">
@@ -26,7 +35,7 @@
     </style>
 
     <style name="ProLabel">
-        <item name="android:layout_width">92dp</item>
+        <item name="android:layout_width">86dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textColor">#FFFFFF</item>
         <item name="android:textSize">12sp</item>
@@ -34,8 +43,10 @@
 
     <style name="ProSeek">
         <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_height">36dp</item>
         <item name="android:layout_weight">1</item>
         <item name="android:max">100</item>
+        <item name="android:progressTint">#FFD54F</item>
+        <item name="android:thumbTint">#FFD54F</item>
     </style>
 </resources>

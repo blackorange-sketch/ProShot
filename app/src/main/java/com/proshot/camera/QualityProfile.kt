@@ -3,6 +3,7 @@ package com.proshot.camera
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.MeteringRectangle
 import android.os.Build
 import android.util.Range
 
@@ -15,6 +16,8 @@ data class ManualState(
     val focusDiopters: Float? = null,
     val evSteps: Int = 0,
     val awbMode: Int = CameraMetadata.CONTROL_AWB_MODE_AUTO,
+    /** Tap-to-focus/meter area in sensor coordinates; null means the camera decides. */
+    val meter: MeteringRectangle? = null,
 )
 
 /**
@@ -106,6 +109,15 @@ object QualityProfile {
     /** Exposure, white balance and focus, shared by preview and still requests. */
     fun applyManual(b: CaptureRequest.Builder, c: CameraCharacteristics, s: ManualState, forStill: Boolean) {
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+
+        s.meter?.let { m ->
+            if ((c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0) {
+                b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(m))
+            }
+            if ((c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0) > 0) {
+                b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(m))
+            }
+        }
 
         if (s.manualExposure) {
             b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)

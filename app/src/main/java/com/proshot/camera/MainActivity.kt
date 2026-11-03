@@ -1,20 +1,33 @@
 package com.proshot.camera
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
+import android.media.MediaActionSound
+import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
+import android.util.Size
+import android.view.Gravity
+import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.TextureView
 import android.view.View
+import android.view.ViewOutlineProvider
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -23,15 +36,22 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     private lateinit var engine: CameraEngine
     private lateinit var preview: AutoFitTextureView
+    private lateinit var grid: GridView
+    private lateinit var focusRing: FocusRingView
     private lateinit var lensBar: LinearLayout
     private lateinit var liveText: TextView
     private lateinit var statusText: TextView
     private lateinit var lensInfo: TextView
-    private lateinit var btnFormat: TextView
-    private lateinit var btnRes: TextView
-    private lateinit var btnMode: TextView
-    private lateinit var btnWb: TextView
+    private lateinit var chipFormat: TextView
+    private lateinit var chipRes: TextView
+    private lateinit var chipWb: TextView
+    private lateinit var chipGrid: TextView
+    private lateinit var btnExpand: ImageView
     private lateinit var btnShutter: View
+    private lateinit var btnFlip: ImageView
+    private lateinit var thumb: ImageView
+    private lateinit var flash: View
+    private lateinit var proPanel: View
     private lateinit var rowIso: View
     private lateinit var rowShutter: View
     private lateinit var rowEv: View
@@ -43,17 +63,25 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private lateinit var seekShutter: SeekBar
     private lateinit var seekEv: SeekBar
     private lateinit var seekFocus: SeekBar
+    private lateinit var modes: List<TextView>
     private lateinit var orientationListener: OrientationEventListener
 
+    private val sound = MediaActionSound()
     private var lenses: List<Lens> = emptyList()
-    private val chips = mutableListOf<TextView>()
     private var current: Lens? = null
+    private var lastBack: Lens? = null
     private var ms = ManualState()
     private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW, 3 = STACK
     private var fullRes = false
+    private var gridOn = false
+    private var panelOpen = false
+    private var shooting = false
     private var surfaceReady = false
     private var opened = false
+    private var lastUri: Uri? = null
     private var wbModes: List<Pair<Int, String>> = emptyList()
+
+    private val hideStatus = Runnable { statusText.visibility = View.GONE }
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) startUp() else status("Потрібен дозвіл на камеру", false)
@@ -66,15 +94,22 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         setContentView(R.layout.activity_main)
 
         preview = findViewById(R.id.preview)
+        grid = findViewById(R.id.grid)
+        focusRing = findViewById(R.id.focusRing)
         lensBar = findViewById(R.id.lensBar)
         liveText = findViewById(R.id.liveText)
         statusText = findViewById(R.id.statusText)
         lensInfo = findViewById(R.id.lensInfo)
-        btnFormat = findViewById(R.id.btnFormat)
-        btnRes = findViewById(R.id.btnRes)
-        btnMode = findViewById(R.id.btnMode)
-        btnWb = findViewById(R.id.btnWb)
+        chipFormat = findViewById(R.id.chipFormat)
+        chipRes = findViewById(R.id.chipRes)
+        chipWb = findViewById(R.id.chipWb)
+        chipGrid = findViewById(R.id.chipGrid)
+        btnExpand = findViewById(R.id.btnExpand)
         btnShutter = findViewById(R.id.btnShutter)
+        btnFlip = findViewById(R.id.btnFlip)
+        thumb = findViewById(R.id.thumb)
+        flash = findViewById(R.id.flash)
+        proPanel = findViewById(R.id.proPanel)
         rowIso = findViewById(R.id.rowIso)
         rowShutter = findViewById(R.id.rowShutter)
         rowEv = findViewById(R.id.rowEv)
@@ -86,6 +121,16 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         seekShutter = findViewById(R.id.seekShutter)
         seekEv = findViewById(R.id.seekEv)
         seekFocus = findViewById(R.id.seekFocus)
+        modes = listOf(
+            findViewById<TextView>(R.id.modePhoto), findViewById<TextView>(R.id.modeStack),
+            findViewById<TextView>(R.id.modeRaw), findViewById<TextView>(R.id.modePro),
+        )
+
+        thumb.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(v: View, outline: Outline) = outline.setOval(0, 0, v.width, v.height)
+        }
+        thumb.clipToOutline = true
+        sound.load(MediaActionSound.SHUTTER_CLICK)
 
         engine = CameraEngine(this, { preview.surfaceTexture }, this)
 
@@ -114,11 +159,40 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             }
         }
 
-        btnShutter.setOnClickListener { engine.capture() }
-        btnFormat.setOnClickListener { cycleFormat() }
-        btnRes.setOnClickListener { toggleRes() }
-        btnMode.setOnClickListener { toggleMode() }
-        btnWb.setOnClickListener { cycleWb() }
+        val gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                tapFocus(e.x, e.y)
+                return true
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                if (abs(vx) > abs(vy) && abs(vx) > 800f) {
+                    switchMode(if (vx < 0) 1 else -1)
+                    return true
+                }
+                return false
+            }
+        })
+        preview.setOnTouchListener { _, ev -> gestures.onTouchEvent(ev) }
+
+        btnShutter.setOnClickListener { shutter() }
+        btnFlip.setOnClickListener { flipCamera() }
+        thumb.setOnClickListener { openGallery() }
+        chipFormat.setOnClickListener { cycleFormat() }
+        chipRes.setOnClickListener { toggleRes() }
+        chipWb.setOnClickListener { cycleWb() }
+        chipGrid.setOnClickListener {
+            gridOn = !gridOn
+            grid.show = gridOn
+            refreshToggles()
+        }
+        btnExpand.setOnClickListener {
+            panelOpen = !panelOpen
+            refreshToggles()
+        }
+        modes.forEachIndexed { i, tv -> tv.setOnClickListener { applyMode(i) } }
         bindSeekbars()
     }
 
@@ -129,6 +203,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             surfaceReady = true
             startUp()
         }
+        refreshThumb()
     }
 
     override fun onPause() {
@@ -139,6 +214,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     }
 
     override fun onDestroy() {
+        sound.release()
         engine.release()
         super.onDestroy()
     }
@@ -151,7 +227,6 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
         if (lenses.isEmpty()) {
             lenses = runCatching { LensCatalog.discover(this) }.getOrDefault(emptyList())
-            buildLensBar()
             if (lenses.isEmpty()) {
                 status("Камери не знайдено", false)
                 return
@@ -162,28 +237,36 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         applyLens(current ?: lenses.first())
     }
 
-    // ---------------------------------------------------------------- lens + toggles
+    // ---------------------------------------------------------------- lenses
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildLensBar() {
         lensBar.removeAllViews()
-        chips.clear()
-        for (l in lenses) {
-            val chip = TextView(this).apply {
-                text = l.label
-                textSize = 13f
-                setPadding(dp(14), dp(7), dp(14), dp(7))
-                setOnClickListener { if (l !== current) applyLens(l) }
+        val cur = current ?: return
+        for (l in lenses.filter { it.front == cur.front }) {
+            val sel = l === cur
+            val num = if (l.equivMm > 0) l.equivMm.toString() else "?"
+            val tv = TextView(this).apply {
+                gravity = Gravity.CENTER
+                text = if (sel) "$num\nmm" else num
+                textSize = if (sel) 12f else 10f
+                setLineSpacing(0f, 0.85f)
+                setTextColor(if (sel) Color.WHITE else 0xFFDDDDDD.toInt())
+                setBackgroundResource(if (sel) R.drawable.lens_selected else R.drawable.lens_dot)
+                setOnClickListener { if (!sel) applyLens(l) }
             }
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.marginEnd = dp(6)
-            lensBar.addView(chip, lp)
-            chips += chip
+            val size = dp(if (sel) 48 else 36)
+            lensBar.addView(tv, LinearLayout.LayoutParams(size, size).apply {
+                marginStart = dp(7)
+                marginEnd = dp(7)
+            })
         }
     }
 
     private fun applyLens(l: Lens) {
         current = l
-        chips.forEachIndexed { i, c -> style(c, lenses[i] === l) }
+        if (!l.front) lastBack = l
         lensInfo.text = LensCatalog.describe(l)
 
         if (!l.supportsRaw && (fmt == 1 || fmt == 2)) fmt = 0
@@ -206,17 +289,76 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             awbMode = wbModes.first().first,
         )
         configureSeekbars(l)
+        buildLensBar()
         refreshToggles()
         pushModes()
         engine.update(ms)
         engine.open(l)
     }
 
+    private fun flipCamera() {
+        val cur = current ?: return
+        val target = if (cur.front) {
+            lastBack ?: lenses.firstOrNull { !it.front }
+        } else {
+            lenses.firstOrNull { it.front }
+        }
+        if (target == null) {
+            status("Другої камери немає", false)
+            return
+        }
+        applyLens(target)
+    }
+
+    // ---------------------------------------------------------------- modes and toggles
+
     private fun pushModes() {
         engine.stack = fmt == 3
         engine.wantJpeg = fmt != 1
         engine.wantRaw = fmt == 1 || fmt == 2
         engine.fullRes = fullRes && fmt != 3
+    }
+
+    private fun currentMode() = when {
+        ms.manualExposure -> 3
+        fmt == 3 -> 1
+        fmt == 1 || fmt == 2 -> 2
+        else -> 0
+    }
+
+    private fun switchMode(step: Int) {
+        applyMode((currentMode() + step).coerceIn(0, modes.size - 1))
+    }
+
+    private fun applyMode(i: Int) {
+        val l = current ?: return
+        val before = fmt
+        when (i) {
+            0 -> {
+                ms = ms.copy(manualExposure = false)
+                fmt = 0
+            }
+            1 -> {
+                ms = ms.copy(manualExposure = false)
+                fmt = 3
+            }
+            2 -> {
+                if (!l.supportsRaw) {
+                    status("RAW недоступний для цього об'єктива", false)
+                    return
+                }
+                ms = ms.copy(manualExposure = false)
+                fmt = 2
+            }
+            else -> {
+                ms = ms.copy(manualExposure = true)
+                if (l.supportsRaw && (fmt == 0 || fmt == 3)) fmt = 2
+            }
+        }
+        refreshToggles()
+        pushModes()
+        engine.update(ms)
+        if (fmt != before) engine.reconfigure()
     }
 
     private fun cycleFormat() {
@@ -235,19 +377,13 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             return
         }
         if (fmt == 3) {
-            status("STACK працює у стандартній роздільності — для FULL вимкни STACK", false)
+            status("СТЕК працює у стандартній роздільності — для FULL вимкни СТЕК", false)
             return
         }
         fullRes = !fullRes
         refreshToggles()
         pushModes()
         engine.reconfigure()
-    }
-
-    private fun toggleMode() {
-        ms = ms.copy(manualExposure = !ms.manualExposure)
-        refreshToggles()
-        engine.update(ms)
     }
 
     private fun cycleWb() {
@@ -259,34 +395,97 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     private fun mp(w: Int, h: Int) = (w.toLong() * h / 1_000_000.0).roundToInt()
 
+    private fun chip(v: TextView, on: Boolean) {
+        v.setBackgroundResource(if (on) R.drawable.chip_bg_on else R.drawable.chip_bg)
+        v.setTextColor(if (on) Color.BLACK else Color.WHITE)
+    }
+
     private fun refreshToggles() {
         val l = current
-        btnFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×8")[fmt]
-        style(btnFormat, fmt != 0)
+
+        chipFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×8")[fmt]
+        chip(chipFormat, fmt != 0)
 
         val std = l?.jpegSize?.let { "${mp(it.width, it.height)}MP" } ?: ""
         val full = l?.maxResJpegSize?.let { "${mp(it.width, it.height)}MP" }
         val fullOn = fullRes && fmt != 3
-        btnRes.text = if (fullOn && full != null) "FULL $full" else "STD $std"
-        style(btnRes, fullOn)
+        chipRes.text = if (fullOn && full != null) "FULL $full" else "STD $std"
+        chip(chipRes, fullOn)
 
-        btnMode.text = if (ms.manualExposure) "MANUAL" else "AUTO"
-        style(btnMode, ms.manualExposure)
+        chipWb.text = wbModes.firstOrNull { it.first == ms.awbMode }?.second ?: "WB"
+        chip(chipWb, ms.awbMode != CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        chip(chipGrid, gridOn)
 
-        btnWb.text = wbModes.firstOrNull { it.first == ms.awbMode }?.second ?: "WB"
-        style(btnWb, ms.awbMode != CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        val mode = currentMode()
+        modes.forEachIndexed { i, tv ->
+            tv.setTextColor(if (i == mode) 0xFFFF3B30.toInt() else Color.WHITE)
+            tv.paint.isFakeBoldText = i == mode
+            tv.invalidate()
+        }
 
+        proPanel.visibility = if (ms.manualExposure || panelOpen) View.VISIBLE else View.GONE
         rowIso.visibility = if (ms.manualExposure) View.VISIBLE else View.GONE
         rowShutter.visibility = if (ms.manualExposure) View.VISIBLE else View.GONE
         rowEv.visibility = if (ms.manualExposure) View.GONE else View.VISIBLE
+        btnExpand.rotation = if (panelOpen) 180f else 0f
     }
 
-    private fun style(v: TextView, on: Boolean) {
-        v.setBackgroundColor(if (on) 0xFFFFC107.toInt() else 0xFF333333.toInt())
-        v.setTextColor(if (on) Color.BLACK else Color.WHITE)
+    // ---------------------------------------------------------------- shutter, focus, gallery
+
+    private fun shutter() {
+        if (shooting) return
+        sound.play(MediaActionSound.SHUTTER_CLICK)
+        btnShutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        flash.alpha = 0.7f
+        flash.animate().alpha(0f).setDuration(200).start()
+        engine.capture()
     }
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun tapFocus(x: Float, y: Float) {
+        if (preview.width == 0 || preview.height == 0) return
+        engine.focusAt(x / preview.width, y / preview.height)
+        focusRing.show(preview.left + x, preview.top + y)
+    }
+
+    private fun refreshThumb() {
+        Thread {
+            var uri: Uri? = null
+            var bmp: android.graphics.Bitmap? = null
+            runCatching {
+                contentResolver.query(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Images.Media._ID),
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                    arrayOf("DCIM/ProShot%"),
+                    "${MediaStore.MediaColumns.DATE_ADDED} DESC",
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        uri = android.content.ContentUris.withAppendedId(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0),
+                        )
+                    }
+                }
+                uri?.let { bmp = contentResolver.loadThumbnail(it, Size(160, 160), null) }
+            }
+            runOnUiThread {
+                lastUri = uri
+                bmp?.let { thumb.setImageBitmap(it) }
+            }
+        }.start()
+    }
+
+    private fun openGallery() {
+        val u = lastUri ?: run {
+            status("Знімків ще немає", false)
+            return
+        }
+        runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(u, "image/*")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            )
+        }
+    }
 
     // ---------------------------------------------------------------- seekbars
 
@@ -371,9 +570,11 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     // ---------------------------------------------------------------- engine callbacks
 
     private fun status(text: String, ok: Boolean = true) {
+        statusText.removeCallbacks(hideStatus)
         statusText.text = text
         statusText.setTextColor(if (ok) Color.WHITE else 0xFFFF8A80.toInt())
         statusText.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        statusText.postDelayed(hideStatus, if (ok) 3000L else 5000L)
     }
 
     override fun onPreviewSize(width: Int, height: Int) {
@@ -385,11 +586,14 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         liveText.text = text
     }
 
-    override fun onMessage(text: String, ok: Boolean) = status(text, ok)
+    override fun onMessage(text: String, ok: Boolean) {
+        status(text, ok)
+        if (ok && text.startsWith("Збережено")) thumb.postDelayed({ refreshThumb() }, 400)
+    }
 
     override fun onBusy(busy: Boolean) {
-        btnShutter.isEnabled = !busy
-        btnShutter.alpha = if (busy) 0.4f else 1f
+        shooting = busy
+        btnShutter.alpha = if (busy) 0.45f else 1f
     }
 
     override fun onModesChanged() {

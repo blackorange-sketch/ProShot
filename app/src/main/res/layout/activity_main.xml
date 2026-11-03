@@ -5,19 +5,45 @@
     android:background="#000000"
     android:orientation="vertical">
 
-    <HorizontalScrollView
+    <!-- Top bar: quick settings -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:scrollbars="none">
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp">
 
-        <LinearLayout
-            android:id="@+id/lensBar"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="6dp" />
-    </HorizontalScrollView>
+        <TextView
+            android:id="@+id/chipFormat"
+            style="@style/Chip" />
 
+        <TextView
+            android:id="@+id/chipRes"
+            style="@style/Chip" />
+
+        <TextView
+            android:id="@+id/chipWb"
+            style="@style/Chip" />
+
+        <TextView
+            android:id="@+id/chipGrid"
+            style="@style/Chip"
+            android:text="GRID" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <ImageView
+            android:id="@+id/btnExpand"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_expand" />
+    </LinearLayout>
+
+    <!-- Viewfinder -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -27,128 +53,192 @@
             android:id="@+id/preview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_gravity="center" />
+            android:layout_gravity="top|center_horizontal" />
+
+        <com.proshot.camera.GridView
+            android:id="@+id/grid"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <com.proshot.camera.FocusRingView
+            android:id="@+id/focusRing"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
 
         <TextView
             android:id="@+id/liveText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|start"
-            android:background="#99000000"
-            android:padding="4dp"
+            android:layout_margin="8dp"
+            android:background="@drawable/chip_bg"
+            android:paddingHorizontal="9dp"
+            android:paddingVertical="3dp"
             android:textColor="#FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="11sp" />
 
         <TextView
             android:id="@+id/statusText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|center_horizontal"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="38dp"
             android:background="#99000000"
-            android:padding="4dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="6dp"
             android:textColor="#FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <!-- Manual controls -->
+        <LinearLayout
+            android:id="@+id/proPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="72dp"
+            android:layout_marginHorizontal="10dp"
+            android:background="@drawable/pro_panel_bg"
+            android:orientation="vertical"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="4dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/rowIso"
+                style="@style/ProRow">
+
+                <TextView
+                    android:id="@+id/labelIso"
+                    style="@style/ProLabel" />
+
+                <SeekBar
+                    android:id="@+id/seekIso"
+                    style="@style/ProSeek" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/rowShutter"
+                style="@style/ProRow">
+
+                <TextView
+                    android:id="@+id/labelShutter"
+                    style="@style/ProLabel" />
+
+                <SeekBar
+                    android:id="@+id/seekShutter"
+                    style="@style/ProSeek" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/rowEv"
+                style="@style/ProRow">
+
+                <TextView
+                    android:id="@+id/labelEv"
+                    style="@style/ProLabel" />
+
+                <SeekBar
+                    android:id="@+id/seekEv"
+                    style="@style/ProSeek" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/ProRow">
+
+                <TextView
+                    android:id="@+id/labelFocus"
+                    style="@style/ProLabel" />
+
+                <SeekBar
+                    android:id="@+id/seekFocus"
+                    style="@style/ProSeek" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Lens selector -->
+        <LinearLayout
+            android:id="@+id/lensBar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="12dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal" />
+
+        <View
+            android:id="@+id/flash"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:alpha="0"
+            android:background="#FFFFFF" />
     </FrameLayout>
 
     <TextView
         android:id="@+id/lensInfo"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingHorizontal="8dp"
-        android:textColor="#9E9E9E"
-        android:textSize="11sp" />
+        android:gravity="center"
+        android:paddingVertical="3dp"
+        android:textColor="#7A7A7A"
+        android:textSize="10sp" />
 
+    <!-- Mode carousel -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="42dp"
         android:orientation="horizontal"
-        android:padding="6dp">
+        android:paddingHorizontal="24dp">
 
         <TextView
-            android:id="@+id/btnFormat"
-            style="@style/ProToggle" />
+            android:id="@+id/modePhoto"
+            style="@style/ModeLabel"
+            android:text="ФОТО" />
 
         <TextView
-            android:id="@+id/btnRes"
-            style="@style/ProToggle" />
+            android:id="@+id/modeStack"
+            style="@style/ModeLabel"
+            android:text="СТЕК" />
 
         <TextView
-            android:id="@+id/btnMode"
-            style="@style/ProToggle" />
+            android:id="@+id/modeRaw"
+            style="@style/ModeLabel"
+            android:text="RAW" />
 
         <TextView
-            android:id="@+id/btnWb"
-            style="@style/ProToggle" />
+            android:id="@+id/modePro"
+            style="@style/ModeLabel"
+            android:text="ПРОФІ" />
     </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingHorizontal="10dp">
-
-        <LinearLayout
-            android:id="@+id/rowIso"
-            style="@style/ProRow">
-
-            <TextView
-                android:id="@+id/labelIso"
-                style="@style/ProLabel" />
-
-            <SeekBar
-                android:id="@+id/seekIso"
-                style="@style/ProSeek" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/rowShutter"
-            style="@style/ProRow">
-
-            <TextView
-                android:id="@+id/labelShutter"
-                style="@style/ProLabel" />
-
-            <SeekBar
-                android:id="@+id/seekShutter"
-                style="@style/ProSeek" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/rowEv"
-            style="@style/ProRow">
-
-            <TextView
-                android:id="@+id/labelEv"
-                style="@style/ProLabel" />
-
-            <SeekBar
-                android:id="@+id/seekEv"
-                style="@style/ProSeek" />
-        </LinearLayout>
-
-        <LinearLayout style="@style/ProRow">
-
-            <TextView
-                android:id="@+id/labelFocus"
-                style="@style/ProLabel" />
-
-            <SeekBar
-                android:id="@+id/seekFocus"
-                style="@style/ProSeek" />
-        </LinearLayout>
-    </LinearLayout>
-
+    <!-- Gallery / shutter / flip -->
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingBottom="14dp"
-        android:paddingTop="6dp">
+        android:layout_height="112dp">
+
+        <ImageView
+            android:id="@+id/thumb"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:layout_gravity="center_vertical|start"
+            android:layout_marginStart="30dp"
+            android:background="@drawable/round_btn_bg"
+            android:scaleType="centerCrop" />
 
         <View
             android:id="@+id/btnShutter"
-            android:layout_width="76dp"
-            android:layout_height="76dp"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
             android:layout_gravity="center"
             android:background="@drawable/shutter" />
+
+        <ImageView
+            android:id="@+id/btnFlip"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:layout_gravity="center_vertical|end"
+            android:layout_marginEnd="30dp"
+            android:background="@drawable/round_btn_bg"
+            android:padding="13dp"
+            android:src="@drawable/ic_flip" />
     </FrameLayout>
 </LinearLayout>

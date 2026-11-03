@@ -68,6 +68,7 @@ class CameraEngine(
 
     @SuppressLint("MissingPermission")
     fun open(target: Lens) {
+        state = state.copy(meter = null)
         handler.post { closeInternal() }
         handler.postDelayed({
             lens = target
@@ -246,8 +247,45 @@ class CameraEngine(
     }
 
     fun update(newState: ManualState) {
-        state = newState
+        state = newState.copy(meter = state.meter)
         handler.post { startPreview() }
+    }
+
+    /**
+     * Tap-to-focus. [nx], [ny] are 0..1 positions inside the upright (portrait) preview; they are
+     * mapped back to sensor coordinates using the sensor orientation.
+     */
+    fun focusAt(nx: Float, ny: Float) {
+        handler.post {
+            val d = device ?: return@post
+            val s = session ?: return@post
+            val l = lens ?: return@post
+            val surf = previewSurface ?: return@post
+            val arr = l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
+            val so = l.chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            val (fx, fy) = when (so) {
+                90 -> ny to (1f - nx)
+                270 -> (1f - ny) to nx
+                180 -> (1f - nx) to (1f - ny)
+                else -> nx to ny
+            }
+            val rw = (arr.width() * 0.16f).toInt().coerceAtLeast(8)
+            val rh = (arr.height() * 0.16f).toInt().coerceAtLeast(8)
+            val x0 = ((arr.left + fx * arr.width()).toInt() - rw / 2).coerceIn(arr.left, arr.right - rw)
+            val y0 = ((arr.top + fy * arr.height()).toInt() - rh / 2).coerceIn(arr.top, arr.bottom - rh)
+            state = state.copy(meter = MeteringRectangle(x0, y0, rw, rh, MeteringRectangle.METERING_WEIGHT_MAX))
+            if (state.focusDiopters == null && QualityProfile.minFocusDiopters(l.chars) > 0f) {
+                try {
+                    val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                    b.addTarget(surf)
+                    QualityProfile.applyManual(b, l.chars, state, false)
+                    b.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                    s.capture(b.build(), null, handler)
+                } catch (_: Throwable) {
+                }
+            }
+            startPreview()
+        }
     }
 
     // ---------------------------------------------------------------- capture
