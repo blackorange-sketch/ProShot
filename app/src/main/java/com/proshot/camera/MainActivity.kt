@@ -206,7 +206,11 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         orientationListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(o: Int) {
                 if (o != OrientationEventListener.ORIENTATION_UNKNOWN) {
-                    engine.deviceOrientation = ((o + 45) / 90 * 90) % 360
+                    // Hysteresis: switch quadrant only once the phone is clearly (>60 deg) away from the
+                    // current one, so a steep downward tilt or a wobble cannot flip the photo sideways.
+                    val cur = engine.deviceOrientation
+                    val d = Math.abs(o - cur).let { if (it > 180) 360 - it else it }
+                    if (d > 60) engine.deviceOrientation = ((o + 45) / 90 * 90) % 360
                 }
             }
         }

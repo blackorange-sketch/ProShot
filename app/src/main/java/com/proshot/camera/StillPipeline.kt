@@ -135,7 +135,7 @@ class StillPipeline(
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        job = Job("PS_${stamp}_${lens.equivMm}mm_$modeTag", orientation).also { it.state = state }
+        job = Job("PS_${stamp}_${lens.equivMm}mm_${modeTag}_o$orientation", orientation).also { it.state = state }
         busy = true
         session.capture(b.build(), callback, handler)
     }

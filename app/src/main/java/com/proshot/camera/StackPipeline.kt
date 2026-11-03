@@ -94,7 +94,7 @@ class StackPipeline(
         QualityProfile.applyStackFrame(b, lens.chars)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        base = "PS_${stamp}_${lens.equivMm}mm_STACK${frameCount}"
+        base = "PS_${stamp}_${lens.equivMm}mm_STACK${frameCount}_o$orientation"
         this.orientation = orientation
         shotState = state
         lastResult = null
