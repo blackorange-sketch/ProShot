@@ -39,7 +39,7 @@ object PhotoSaver {
      * on a temp file in the app cache and only then go to MediaStore. [Saved.note] reports what was read back.
      */
     fun saveJpegStamped(
-        ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int, meta: ShotMeta? = null,
+        ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int?, meta: ShotMeta? = null,
     ): Saved {
         var data = bytes
         var note: String

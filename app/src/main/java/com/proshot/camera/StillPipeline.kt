@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraMetadata
@@ -193,7 +195,7 @@ class StillPipeline(
                         buf.get(bytes)
                         val sw = if (maxRes) "ProShot FULL" else "ProShot"
                         val meta = ShotMeta.from(lens, result, j.state, sw, it.width, it.height)
-                        val sv = PhotoSaver.saveJpegStamped(ctx, bytes, j.base, j.orientation, meta)
+                        val sv = PhotoSaver.saveJpegStamped(ctx, bytes, j.base, null, meta) // keep the HAL's own orientation
                         diag += (if (diag.isNotEmpty()) " >> " else "") + "камерний JPEG ${sv.note}"
                     }
                     notes += diag
@@ -225,16 +227,25 @@ class StillPipeline(
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: error("decode failed")
+        val bmpW = bmp.width
         val frame = YuvConvert.fromBitmap(bmp)
         bmp.recycle()
         val (post, optics) = LensProfiles.postFor(lens, frame.width, frame.height)
         val finished = Finisher.run(frame, post)
-        val upright = YuvConvert.rotate(finished, j.orientation)
+        // This HAL already rotates the JPEG pixels itself (tag = 1, portrait dimensions), others leave the
+        // pixels as captured and write an orientation tag. Whatever the tag still asks for is baked in here.
+        val halTag = ExifInterface(ByteArrayInputStream(bytes))
+        val deg = if (halTag.getAttribute(ExifInterface.TAG_ORIENTATION) == null) {
+            if (bmpW == img.width) j.orientation else 0
+        } else {
+            halTag.rotationDegrees
+        }
+        val upright = YuvConvert.rotate(finished, deg)
         val jpeg = YuvConvert.toJpeg(upright, 100)
         val sw = (if (superSample) "ProShot SUPER 50>12MP" else "ProShot DETAIL") + (if (optics) " + optics" else "")
         val meta = ShotMeta.from(lens, result, j.state, sw, upright.width, upright.height)
         val sv = PhotoSaver.saveJpegStamped(ctx, jpeg, j.base, 0, meta)
-        (sv.uri != null) to "px ${upright.width}x${upright.height} ${sv.note}"
+        (sv.uri != null) to "px ${upright.width}x${upright.height} rot$deg ${sv.note}"
     } catch (t: Throwable) {
         false to "обробка не вдалася: ${t::class.java.simpleName} ${t.message}"
     }
