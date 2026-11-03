@@ -29,6 +29,8 @@ data class Lens(
     val front: Boolean,
     /** Known sensor name for the Z50S Pro lens at this focal length, or empty. */
     val sensor: String,
+    /** True when the full-resolution sizes come from the normal stream map (as "high resolution" sizes), so no sensor pixel mode is needed. */
+    val maxResDefaultMode: Boolean = false,
 ) {
     val supportsMaxRes: Boolean get() = maxResJpegSize != null
 }
@@ -95,6 +97,20 @@ object LensCatalog {
             maxResRaw = mm?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
         }
 
+        // Many 50 MP phones list the full-resolution sizes only as "high resolution" outputs of the normal map,
+        // which getOutputSizes() hides. Use them when the dedicated max-resolution map has nothing.
+        var maxResDefault = false
+        if (maxRes == null && map != null) {
+            val hiJ = map.getHighResolutionOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+            val hiR = map.getHighResolutionOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
+            val base = jpegSize?.let { it.width.toLong() * it.height } ?: 0L
+            if (hiJ != null && hiJ.width.toLong() * hiJ.height > base * 2) {
+                maxRes = hiJ
+                maxResRaw = hiR
+                maxResDefault = true
+            }
+        }
+
         val sensorName = when {
             front -> "OV16A"
             equiv in 10..17 -> "OV50D"
@@ -125,6 +141,7 @@ object LensCatalog {
             maxResRawSize = maxResRaw,
             front = front,
             sensor = sensorName,
+            maxResDefaultMode = maxResDefault,
         )
     }
 
