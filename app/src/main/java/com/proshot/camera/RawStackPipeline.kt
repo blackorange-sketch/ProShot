@@ -44,7 +44,7 @@ class RawStackPipeline(
 ) : Shooter {
 
     private val profile = LensProfiles.forLens(lens)
-    private val frameCount = profile.stackFrames
+    private val frameCount = profile.rawStackFrames
     private val size: Size = lens.rawSize ?: error("no RAW size")
     override val jpegSize: Size? = null
     override val rawSize: Size? = size
@@ -70,6 +70,10 @@ class RawStackPipeline(
 
     // Camera handler thread.
     private var done = 0
+    private var launched = 0
+    private var received = 0
+    private var session: CameraCaptureSession? = null
+    private var request: CaptureRequest? = null
     private var afterCapture: (() -> Unit)? = null
     private val inFlight = AtomicInteger()
 
@@ -107,6 +111,8 @@ class RawStackPipeline(
         lastResult = null
         afterCapture = onExposed
         done = 0
+        launched = 0
+        received = 0
         expected = frameCount
         inFlight.set(0)
         resultLatch = CountDownLatch(1)
@@ -116,8 +122,23 @@ class RawStackPipeline(
             meta = null
             processed = 0
         }
-        val req = b.build()
-        session.captureBurst(List(frameCount) { req }, callback, handler)
+        request = b.build()
+        this.session = session
+        launchNext()
+    }
+
+    /** Frames are requested in small batches so unprocessed RAW frames never pile up in memory. */
+    private fun launchNext() {
+        val s = session ?: return
+        val req = request ?: return
+        val n = minOf(BATCH, frameCount - launched)
+        if (n <= 0) return
+        launched += n
+        s.captureBurst(List(n) { req }, callback, handler)
+    }
+
+    private fun maybeLaunch() {
+        if (busy && launched < frameCount && received >= launched && inFlight.get() <= 1) launchNext()
     }
 
     private val callback = object : CameraCaptureSession.CaptureCallback() {
@@ -134,10 +155,12 @@ class RawStackPipeline(
 
         override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
             frameDone()
+            received++
             io.execute {
                 expected--
                 maybeFinish()
             }
+            maybeLaunch()
         }
     }
 
@@ -154,6 +177,7 @@ class RawStackPipeline(
             img.close()
             return
         }
+        received++
         if (inFlight.get() >= MAX_IN_FLIGHT) {
             // The merge cannot keep up: skip this frame rather than run out of memory.
             img.close()
@@ -161,6 +185,7 @@ class RawStackPipeline(
                 expected--
                 maybeFinish()
             }
+            maybeLaunch()
             return
         }
         val frame = try {
@@ -170,6 +195,7 @@ class RawStackPipeline(
         }
         inFlight.incrementAndGet()
         io.execute { consume(frame) }
+        maybeLaunch()
     }
 
     private fun readRaw(img: Image): ShortArray {
@@ -205,6 +231,7 @@ class RawStackPipeline(
         } finally {
             inFlight.decrementAndGet()
         }
+        handler.post { maybeLaunch() }
         maybeFinish()
     }
 
@@ -350,7 +377,8 @@ class RawStackPipeline(
     }
 
     companion object {
-        private const val MAX_IN_FLIGHT = 4
+        private const val MAX_IN_FLIGHT = 6
+        private const val BATCH = 4
 
         private val D50_TO_SRGB = floatArrayOf(
             3.1338561f, -1.6168667f, -0.4906146f,

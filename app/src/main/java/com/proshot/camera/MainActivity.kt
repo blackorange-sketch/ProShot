@@ -621,8 +621,10 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private fun refreshToggles() {
         val l = current
 
-        val stackN = l?.let { LensProfiles.forLens(it).stackFrames } ?: 8
-        chipFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×$stackN", "RAW-STACK ×$stackN")[fmt]
+        val prof = l?.let { LensProfiles.forLens(it) }
+        val stackN = prof?.stackFrames ?: 8
+        val rawN = prof?.rawStackFrames ?: 12
+        chipFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×$stackN", "RAW-STACK ×$rawN")[fmt]
         chip(chipFormat, fmt != 0)
 
         val std = l?.jpegSize?.let { "${mp(it.width, it.height)}MP" } ?: ""

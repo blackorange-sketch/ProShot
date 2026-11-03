@@ -17,6 +17,8 @@ data class LensProfile(
     val name: String,
     /** Burst length in STACK mode: noisier sensors get more frames. */
     val stackFrames: Int,
+    /** Burst length in RAW-STACK mode (RAW frames are cheap to merge but heavy to hold, so they run in small batches). */
+    val rawStackFrames: Int,
     /** In-camera denoise strength for single-frame stills (NOISE_REDUCTION_MODE_*). */
     val stillNoiseReduction: Int,
     /** Finishing pass applied after stacking. */
@@ -30,6 +32,7 @@ object LensProfiles {
     private val MAIN = LensProfile(
         name = "Main 35mm · IMX800",
         stackFrames = 6,
+        rawStackFrames = 12,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_FAST,
         post = PostParams(sharpenAmount = 0.9f, sharpenRadius = 1.0f, sharpenThreshold = 3, cornerBoost = 0.2f, chromaDenoise = 0.3f, clarity = 0.25f),
     )
@@ -37,6 +40,7 @@ object LensProfiles {
     private val ULTRAWIDE = LensProfile(
         name = "Ultra-wide 13mm · OV50D",
         stackFrames = 8,
+        rawStackFrames = 12,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
         post = PostParams(sharpenAmount = 0.95f, sharpenRadius = 1.0f, sharpenThreshold = 3, cornerBoost = 0.9f, chromaDenoise = 0.45f, clarity = 0.2f),
         vignetteIfUncorrected = 0.25f,
@@ -45,6 +49,7 @@ object LensProfiles {
     private val TELE = LensProfile(
         name = "Tele 80mm · Hi-847",
         stackFrames = 10,
+        rawStackFrames = 14,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
         post = PostParams(sharpenAmount = 0.9f, sharpenRadius = 1.2f, sharpenThreshold = 4, cornerBoost = 0.1f, chromaDenoise = 0.6f, clarity = 0.2f),
     )
@@ -52,6 +57,7 @@ object LensProfiles {
     private val FRONT = LensProfile(
         name = "Front · OV16A",
         stackFrames = 8,
+        rawStackFrames = 8,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
         post = PostParams(sharpenAmount = 0.55f, sharpenRadius = 1.3f, sharpenThreshold = 4, cornerBoost = 0.3f, chromaDenoise = 0.5f),
     )
