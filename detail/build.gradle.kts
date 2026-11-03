@@ -10,8 +10,14 @@ android {
     namespace = "com.proshot.detail"
     compileSdk = 34
 
-    // Prefer the NDK that CI images already carry over downloading one.
-    System.getenv("ANDROID_NDK_LATEST_HOME")?.let { ndkPath = it }
+    if (withNative) {
+        // Use the NDK version the CI image already has instead of AGP's default one.
+        val ndkDir = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK_ROOT")
+        val ndkName = ndkDir?.let { File(it).name }
+        if (ndkName != null && Regex("""\d+\.\d+\.\d+""").matches(ndkName)) {
+            ndkVersion = ndkName
+        }
+    }
 
     defaultConfig {
         minSdk = 29
