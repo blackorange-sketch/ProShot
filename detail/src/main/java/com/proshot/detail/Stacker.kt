@@ -8,7 +8,7 @@ import kotlin.math.roundToInt
  * with a weight that falls to zero where it disagrees with the reference (moving subjects,
  * misalignment), so ghosts are rejected while static areas lose noise by roughly sqrt(N).
  */
-class Stacker(private val ref: YuvFrame, sigma: Float) {
+class Stacker(private val ref: YuvFrame, sigma: Float) : FrameStacker {
 
     private val w = ref.width
     private val h = ref.height
@@ -23,7 +23,7 @@ class Stacker(private val ref: YuvFrame, sigma: Float) {
     private val sumV = FloatArray(cw * ch)
     private val wgtC = FloatArray(cw * ch)
 
-    var frames = 1
+    override var frames = 1
         private set
 
     init {
@@ -38,8 +38,7 @@ class Stacker(private val ref: YuvFrame, sigma: Float) {
         }
     }
 
-    /** Aligns and accumulates [f]; returns the (dx, dy) shift that was found. */
-    fun add(f: YuvFrame): IntArray {
+    override fun add(f: YuvFrame): IntArray {
         require(f.width == w && f.height == h) { "frame size mismatch" }
         val s = aligner.estimate(f.y)
         val dx = s[0]
@@ -96,7 +95,7 @@ class Stacker(private val ref: YuvFrame, sigma: Float) {
         return s
     }
 
-    fun result(): YuvFrame {
+    override fun result(): YuvFrame {
         val y = ByteArray(w * h)
         for (i in y.indices) y[i] = (sumY[i] / wgtY[i]).roundToInt().coerceIn(0, 255).toByte()
         val u = ByteArray(cw * ch)

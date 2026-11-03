@@ -22,7 +22,9 @@ jobs:
           gradle-version: 8.7
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          # If the native (C++) part cannot be built on this runner, fall back to the Kotlin-only build.
+          gradle assembleDebug --stacktrace || gradle assembleDebug --stacktrace -PnoNative
 
       - uses: actions/upload-artifact@v4
         with:

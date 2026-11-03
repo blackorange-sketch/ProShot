@@ -119,7 +119,8 @@ object LensCatalog {
     fun describe(l: Lens): String = buildString {
         append(l.label)
         if (l.sensor.isNotEmpty()) append(" · ").append(l.sensor)
-        append(" [id ").append(l.physicalId ?: l.openId).append("]\n")
+        append(" [id ").append(l.physicalId ?: l.openId).append("]")
+        append(" · стек ").append(LensProfiles.forLens(l).stackFrames).append("×\n")
         l.jpegSize?.let { append("JPEG ${it.width}x${it.height}") }
         l.maxResJpegSize?.let { append(" | FULL ${it.width}x${it.height}") }
         append(if (l.supportsRaw) " | RAW ${l.rawSize!!.width}x${l.rawSize.height}" else " | no RAW")

@@ -13,8 +13,10 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.media.ImageReader
 import android.os.Handler
 import android.util.Size
+import com.proshot.detail.Finisher
+import com.proshot.detail.FrameStacker
 import com.proshot.detail.Noise
-import com.proshot.detail.Stacker
+import com.proshot.detail.StackerFactory
 import com.proshot.detail.YuvFrame
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,12 +31,13 @@ import java.util.concurrent.ExecutorService
 class StackPipeline(
     private val ctx: Context,
     private val lens: Lens,
-    private val frameCount: Int,
     private val handler: Handler,
     private val io: ExecutorService,
     private val onFinished: (message: String, ok: Boolean) -> Unit,
 ) : Shooter {
 
+    private val profile = LensProfiles.forLens(lens)
+    private val frameCount = profile.stackFrames
     private val size: Size = pickSize(lens)
     override val jpegSize: Size? = size
     override val rawSize: Size? = null
@@ -51,7 +54,7 @@ class StackPipeline(
     @Volatile private var base = ""
 
     // Touched only on the io thread.
-    private var stacker: Stacker? = null
+    private var stacker: FrameStacker? = null
     private var processed = 0
 
     // Touched only on the camera handler thread.
@@ -85,7 +88,7 @@ class StackPipeline(
         val b = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
         b.addTarget(reader.surface)
         QualityProfile.applyManual(b, lens.chars, state, true)
-        QualityProfile.applyStill(b, lens.chars)
+        QualityProfile.applyStill(b, lens.chars, profile.stillNoiseReduction)
         QualityProfile.applyStackFrame(b, lens.chars)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -144,7 +147,7 @@ class StackPipeline(
     private fun consume(frame: YuvFrame) {
         try {
             val s = stacker
-            if (s == null) stacker = Stacker(frame, Noise.sigmaForIso(isoHint)) else s.add(frame)
+            if (s == null) stacker = StackerFactory.create(frame, Noise.sigmaForIso(isoHint)) else s.add(frame)
             processed++
         } catch (t: Throwable) {
             expected--
@@ -163,13 +166,19 @@ class StackPipeline(
             return
         }
         try {
-            val jpeg = YuvConvert.toJpeg(s.result(), 100)
+            val merged = s.result()
+            val (post, optics) = LensProfiles.postFor(lens, merged.width, merged.height)
+            val finished = Finisher.run(merged, post)
+            val jpeg = YuvConvert.toJpeg(finished, 100)
             PhotoSaver.saveJpegBytes(ctx, jpeg, base, orientation)
             busy = false
-            onFinished("Збережено STACK ${s.frames}×: $base", true)
+            val engineName = if (StackerFactory.nativeAvailable) "C++" else "Kotlin"
+            onFinished("Збережено STACK ${s.frames}× ($engineName${if (optics) " + оптика" else ""}): $base", true)
         } catch (t: Throwable) {
             busy = false
             onFinished("Помилка стекінгу: ${t.message}", false)
+        } finally {
+            s.close()
         }
     }
 

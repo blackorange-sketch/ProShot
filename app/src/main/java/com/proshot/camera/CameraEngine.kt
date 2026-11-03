@@ -153,7 +153,7 @@ class CameraEngine(
             }
         }
         val still: Shooter = if (stack) {
-            StackPipeline(ctx, l, STACK_FRAMES, handler, io, finished)
+            StackPipeline(ctx, l, handler, io, finished)
         } else {
             StillPipeline(ctx, l, jpeg, raw, fullRes, handler, io, finished)
         }
@@ -298,9 +298,6 @@ class CameraEngine(
         return (so + sign * deviceOrientation + 360) % 360
     }
 
-    private companion object {
-        const val STACK_FRAMES = 8
-    }
 
     fun capture() {
         handler.post {

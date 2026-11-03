@@ -32,13 +32,17 @@ object QualityProfile {
     private fun <T> CameraCharacteristics.list(key: CameraCharacteristics.Key<T>): T? = get(key)
 
     /** Settings for the still capture: everything pushed to maximum quality. */
-    fun applyStill(b: CaptureRequest.Builder, c: CameraCharacteristics) {
+    fun applyStill(
+        b: CaptureRequest.Builder,
+        c: CameraCharacteristics,
+        nrMode: Int = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+    ) {
         b.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CameraMetadata.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
         b.set(CaptureRequest.JPEG_QUALITY, 100.toByte())
         b.set(CaptureRequest.JPEG_THUMBNAIL_SIZE, android.util.Size(0, 0))
 
         best(c.list(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES),
-            CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY, CameraMetadata.NOISE_REDUCTION_MODE_FAST)
+            nrMode, CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY, CameraMetadata.NOISE_REDUCTION_MODE_FAST)
             ?.let { b.set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
 
         best(c.list(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES),
