@@ -21,7 +21,21 @@ jobs:
         with:
           gradle-version: 8.7
 
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/proshot.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/proshot.jks" >> "$GITHUB_ENV"
+            echo "Signing with the fixed ProShot key"
+          else
+            echo "No KEYSTORE_B64 secret: using the default debug key"
+          fi
+
       - name: Build debug APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           # If the native (C++) part cannot be built on this runner, fall back to the Kotlin-only build.
           gradle assembleDebug --stacktrace || gradle assembleDebug --stacktrace -PnoNative

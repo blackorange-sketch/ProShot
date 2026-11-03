@@ -11,14 +11,33 @@ android {
         applicationId = "com.proshot.camera"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1.0"
     }
 
+    // A fixed release key (supplied by CI from secrets) lets every build be installed over the previous one.
+    // Without it (local builds, forks) the default debug key is used.
+    val ksPath = System.getenv("KEYSTORE_FILE")
+    val ksPass = System.getenv("KEYSTORE_PASSWORD")
+    val hasKey = ksPath != null && ksPass != null && File(ksPath).exists()
+    if (hasKey) {
+        signingConfigs {
+            create("proshot") {
+                storeFile = File(ksPath!!)
+                storePassword = ksPass
+                keyAlias = "proshot"
+                keyPassword = ksPass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasKey) signingConfig = signingConfigs.getByName("proshot")
+        }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasKey) signingConfigs.getByName("proshot") else signingConfigs.getByName("debug")
         }
     }
 
