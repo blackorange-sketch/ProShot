@@ -39,6 +39,8 @@ data class Lens(
 
 object LensCatalog {
 
+    private const val EXPERIMENTAL_MAXRES = false
+
     fun discover(ctx: Context): List<Lens> {
         val mgr = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val ids = mgr.cameraIdList.toSet()
@@ -119,7 +121,9 @@ object LensCatalog {
         // nubia declares the 50 MP pixel array (8192x6144) but ships no stream map for it. Offer it as an
         // experiment: the engine tries to open such a stream and falls back to the normal size if the HAL refuses.
         var experimental = false
-        if (maxRes == null && Build.VERSION.SDK_INT >= 31) {
+        // Tested on the Z50S Pro (v21 log): the HAL accepts an 8192x6144 stream but hands back a ~1440x1920 JPEG,
+        // so the 50 MP path is switched off. Flip to true to retry on another phone or ROM.
+        if (EXPERIMENTAL_MAXRES && maxRes == null && Build.VERSION.SDK_INT >= 31) {
             val px = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION)
             val base = jpegSize?.let { it.width.toLong() * it.height } ?: 0L
             if (px != null && px.width.toLong() * px.height > base * 2) {

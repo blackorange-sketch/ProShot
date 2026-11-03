@@ -233,7 +233,7 @@ class StillPipeline(
                 ShotLog.add(
                     ctx,
                     "SHOT ${j.base} lens=${lens.label} cap=${j.tCap - j.t0}ms total=${SystemClock.elapsedRealtime() - j.t0}ms " +
-                        "camJpeg=${j.camBytes / 1024}KB ${j.stats} ${ShotLog.result(result)} | ${notes.joinToString("; ")}",
+                        "camJpeg=${j.camBytes / 1024}KB camPx=${camPx(jpegBytes)} ${j.stats} ${ShotLog.result(result)} | ${notes.joinToString("; ")}",
                 )
                 onFinished("Збережено ${parts.joinToString("+")}: ${j.base}" + (if (notes.isEmpty()) "" else " [${notes.joinToString("; ")}]"), true)
             } catch (t: Throwable) {
@@ -279,6 +279,14 @@ class StillPipeline(
         (sv.uri != null) to "px ${upright.width}x${upright.height} rot$deg q${Encoding.quality} ${sv.note}"
     } catch (t: Throwable) {
         false to "обробка не вдалася: ${t::class.java.simpleName} ${t.message}"
+    }
+
+    /** Real pixel size of the camera's JPEG (the stream size can differ from what the HAL actually delivers). */
+    private fun camPx(b: ByteArray?): String {
+        if (b == null) return "-"
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(b, 0, b.size, o)
+        return "${o.outWidth}x${o.outHeight}"
     }
 
     private fun discard(j: Job) {
