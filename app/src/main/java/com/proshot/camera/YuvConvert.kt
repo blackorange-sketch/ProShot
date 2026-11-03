@@ -75,6 +75,39 @@ object YuvConvert {
         return YuvFrame(w, h, y, u, v)
     }
 
+    /**
+     * Rotates a frame clockwise by [degrees] (0/90/180/270) so the pixels themselves are upright.
+     * Gallery apps then show the photo correctly whatever they do with the EXIF orientation tag.
+     */
+    fun rotate(f: YuvFrame, degrees: Int): YuvFrame {
+        val d = (degrees % 360 + 360) % 360
+        if (d == 0) return f
+        val swap = d != 180
+        return YuvFrame(
+            if (swap) f.height else f.width,
+            if (swap) f.width else f.height,
+            rotatePlane(f.y, f.width, f.height, d),
+            rotatePlane(f.u, f.width / 2, f.height / 2, d),
+            rotatePlane(f.v, f.width / 2, f.height / 2, d),
+        )
+    }
+
+    private fun rotatePlane(src: ByteArray, w: Int, h: Int, d: Int): ByteArray {
+        val dst = ByteArray(src.size)
+        when (d) {
+            90 -> for (yy in 0 until w) {
+                val row = yy * h
+                for (xx in 0 until h) dst[row + xx] = src[(h - 1 - xx) * w + yy]
+            }
+            180 -> for (i in src.indices) dst[i] = src[src.size - 1 - i]
+            else -> for (yy in 0 until w) {
+                val row = yy * h
+                for (xx in 0 until h) dst[row + xx] = src[xx * w + (w - 1 - yy)]
+            }
+        }
+        return dst
+    }
+
     fun toJpeg(f: YuvFrame, quality: Int): ByteArray {
         val w = f.width
         val h = f.height

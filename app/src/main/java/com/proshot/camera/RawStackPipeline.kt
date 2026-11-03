@@ -104,7 +104,7 @@ class RawStackPipeline(
         QualityProfile.applyStackFrame(b, lens.chars)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        base = "PS_${stamp}_${lens.equivMm}mm_RAWSTACK"
+        base = "PS_${stamp}_${lens.equivMm}mm_RAWSTACK${frameCount}"
         this.orientation = orientation
         shotState = state
         firstResult = null
@@ -277,13 +277,14 @@ class RawStackPipeline(
             val rendered = RawRender.render(merged, m, params)
             val (post, optics) = LensProfiles.postFor(lens, rendered.width, rendered.height)
             val finished = Finisher.run(rendered, post)
-            val jpeg = YuvConvert.toJpeg(finished, 100)
+            val upright = YuvConvert.rotate(finished, orientation)
+            val jpeg = YuvConvert.toJpeg(upright, 100)
             val shot = ShotMeta.from(
                 lens, r, shotState,
                 "ProShot RAW-STACK ${s.frames}x" + (if (optics) " + optics" else ""),
-                finished.width, finished.height,
+                upright.width, upright.height,
             )
-            PhotoSaver.saveJpegBytes(ctx, jpeg, base, orientation, shot)
+            PhotoSaver.saveJpegBytes(ctx, jpeg, base, 0, shot)
             busy = false
             onFinished("Збережено RAW-STACK ${s.frames}×: $base", true)
         } catch (t: Throwable) {

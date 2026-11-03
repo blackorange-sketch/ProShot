@@ -29,14 +29,17 @@ class RawRenderParams(
 
 object RawRender {
 
+    private const val SAT = 1.10f
     private const val LUT_MAX = 4f
     private const val LUT_SIZE = 16384
     private val lut: FloatArray = FloatArray(LUT_SIZE + 1) { i ->
         val x = i.toFloat() / LUT_SIZE * LUT_MAX
         // Soft shoulder into white, sRGB curve, then a mild S-curve for contrast.
-        val hl = if (x <= 0.75f) x else 0.75f + 0.25f * kotlin.math.tanh((x - 0.75f) / 0.25f)
+        // Black point: a hair of the darkest signal is clipped so shadows do not look hazy.
+        val xb = ((x - 0.004f) / 0.996f).coerceAtLeast(0f)
+        val hl = if (xb <= 0.75f) xb else 0.75f + 0.25f * kotlin.math.tanh((xb - 0.75f) / 0.25f)
         val v = if (hl <= 0.0031308f) 12.92f * hl else 1.055f * hl.pow(1f / 2.4f) - 0.055f
-        (v - 0.10f * sin(2.0 * PI * v).toFloat() / (2f * PI.toFloat())).coerceIn(0f, 1f)
+        (v - 0.16f * sin(2.0 * PI * v).toFloat() / (2f * PI.toFloat())).coerceIn(0f, 1f)
     }
 
     /** [merged] holds black-subtracted raw values (0 .. [RawMeta.range]) as returned by [RawStacker.result]. */
@@ -80,8 +83,8 @@ object RawRender {
                     sv += 0.5f * r - 0.418688f * g - 0.081312f * b
                 }
                 val ci = by * (outW / 2) + bx
-                u[ci] = (su * 0.25f * 255f + 128f + 0.5f).toInt().coerceIn(0, 255).toByte()
-                v[ci] = (sv * 0.25f * 255f + 128f + 0.5f).toInt().coerceIn(0, 255).toByte()
+                u[ci] = (su * 0.25f * SAT * 255f + 128f + 0.5f).toInt().coerceIn(0, 255).toByte()
+                v[ci] = (sv * 0.25f * SAT * 255f + 128f + 0.5f).toInt().coerceIn(0, 255).toByte()
             }
         }
         return YuvFrame(outW, outH, y, u, v)
@@ -155,7 +158,7 @@ object RawRender {
             }
         }
         val med = (median + 0.5f) / 1023f
-        val target = 0.18f * 2f.pow(p.biasEv)
+        val target = 0.23f * 2f.pow(p.biasEv)
         return (target / med).coerceIn(0.9f, 4f)
     }
 

@@ -94,7 +94,7 @@ class StackPipeline(
         QualityProfile.applyStackFrame(b, lens.chars)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        base = "PS_${stamp}_${lens.equivMm}mm_STACK"
+        base = "PS_${stamp}_${lens.equivMm}mm_STACK${frameCount}"
         this.orientation = orientation
         shotState = state
         lastResult = null
@@ -174,14 +174,15 @@ class StackPipeline(
             val merged = s.result()
             val (post, optics) = LensProfiles.postFor(lens, merged.width, merged.height)
             val finished = Finisher.run(merged, post)
-            val jpeg = YuvConvert.toJpeg(finished, 100)
+            val upright = YuvConvert.rotate(finished, orientation)
+            val jpeg = YuvConvert.toJpeg(upright, 100)
             val engineName = if (StackerFactory.nativeAvailable) "C++" else "Kotlin"
             val meta = ShotMeta.from(
                 lens, lastResult, shotState,
                 "ProShot STACK ${s.frames}x ($engineName${if (optics) " + optics" else ""})",
-                finished.width, finished.height,
+                upright.width, upright.height,
             )
-            PhotoSaver.saveJpegBytes(ctx, jpeg, base, orientation, meta)
+            PhotoSaver.saveJpegBytes(ctx, jpeg, base, 0, meta)
             busy = false
             onFinished("Збережено STACK ${s.frames}× ($engineName${if (optics) " + оптика" else ""}): $base", true)
         } catch (t: Throwable) {

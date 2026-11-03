@@ -55,6 +55,20 @@ class StillPipeline(
     private val processJpeg = (jpegSize?.let { it.width.toLong() * it.height <= 16_500_000L } == true && !maxRes) ||
         (superSample && maxRes && jpegSize != null)
 
+    /** Capture mode, written into the file name so a photo can be traced back to the code path that made it. */
+    private val modeTag: String = buildString {
+        append(
+            when {
+                jpegSize == null -> "RAW"
+                maxRes && superSample -> "SUPER"
+                maxRes -> "FULL"
+                processJpeg -> "DETAIL"
+                else -> "STD"
+            },
+        )
+        if (jpegSize != null && rawSize != null) append("_DNG")
+    }
+
     private val depth = if (maxRes) 1 else 2
     private val jpegReader: ImageReader? = jpegSize?.let {
         ImageReader.newInstance(it.width, it.height, ImageFormat.JPEG, depth)
@@ -121,7 +135,7 @@ class StillPipeline(
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        job = Job("PS_${stamp}_${lens.equivMm}mm", orientation).also { it.state = state }
+        job = Job("PS_${stamp}_${lens.equivMm}mm_$modeTag", orientation).also { it.state = state }
         busy = true
         session.capture(b.build(), callback, handler)
     }
@@ -170,7 +184,7 @@ class StillPipeline(
                         val uri = PhotoSaver.saveJpeg(ctx, it, j.base)
                         if (uri != null) {
                             val sw = if (maxRes) "ProShot FULL" else "ProShot"
-                            PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height))
+                            PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height), j.orientation)
                         }
                     }
                     parts += if (processed) (if (superSample) "JPEG SR" else "JPEG+") else "JPEG"
@@ -205,10 +219,11 @@ class StillPipeline(
         bmp.recycle()
         val (post, optics) = LensProfiles.postFor(lens, frame.width, frame.height)
         val finished = Finisher.run(frame, post)
-        val jpeg = YuvConvert.toJpeg(finished, 100)
+        val upright = YuvConvert.rotate(finished, j.orientation)
+        val jpeg = YuvConvert.toJpeg(upright, 100)
         val sw = (if (superSample) "ProShot SUPER 50>12MP" else "ProShot DETAIL") + (if (optics) " + optics" else "")
-        val meta = ShotMeta.from(lens, result, j.state, sw, finished.width, finished.height)
-        PhotoSaver.saveJpegBytes(ctx, jpeg, j.base, j.orientation, meta) != null
+        val meta = ShotMeta.from(lens, result, j.state, sw, upright.width, upright.height)
+        PhotoSaver.saveJpegBytes(ctx, jpeg, j.base, 0, meta) != null
     } catch (t: Throwable) {
         false
     }
