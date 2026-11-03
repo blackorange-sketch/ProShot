@@ -83,6 +83,22 @@ object QualityProfile {
         }
     }
 
+    /**
+     * Extra settings for burst frames that will be merged: minimal in-camera denoise (the stack
+     * removes noise without smearing detail) and exposure/white balance locked across the burst.
+     */
+    fun applyStackFrame(b: CaptureRequest.Builder, c: CameraCharacteristics) {
+        best(c.list(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES),
+            CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL, CameraMetadata.NOISE_REDUCTION_MODE_FAST)
+            ?.let { b.set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
+        if (c.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) {
+            b.set(CaptureRequest.CONTROL_AE_LOCK, true)
+        }
+        if (c.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) {
+            b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+        }
+    }
+
     /** First preferred mode that the lens supports, or null if none is supported. */
     private fun best(available: IntArray?, vararg preferred: Int): Int? =
         preferred.firstOrNull { available.has(it) }

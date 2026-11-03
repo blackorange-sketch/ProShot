@@ -46,7 +46,7 @@ class CameraEngine(
 
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
-    private var pipeline: StillPipeline? = null
+    private var pipeline: Shooter? = null
     private var previewSurface: Surface? = null
     private var lens: Lens? = null
 
@@ -55,6 +55,8 @@ class CameraEngine(
     @Volatile var wantJpeg = true
     @Volatile var wantRaw = false
     @Volatile var fullRes = false
+    /** Multi-frame stacking mode (works at the binned resolution, so it overrides full-res). */
+    @Volatile var stack = false
     @Volatile var deviceOrientation = 0
 
     @Volatile private var afState: Int? = null
@@ -131,22 +133,27 @@ class CameraEngine(
             return
         }
 
-        val raw = wantRaw && l.supportsRaw && (!fullRes || l.maxResRawSize != null)
+        val raw = !stack && wantRaw && l.supportsRaw && (!fullRes || l.maxResRawSize != null)
         val jpeg = wantJpeg || !raw
         if (wantRaw && !raw) msg("RAW у цьому режимі недоступний — лише JPEG", false)
 
-        val stillSize = if (fullRes && l.maxResJpegSize != null) l.maxResJpegSize else l.jpegSize
+        val stillSize = if (fullRes && !stack && l.maxResJpegSize != null) l.maxResJpegSize else l.jpegSize
         val previewSize = choosePreview(l, stillSize)
         st.setDefaultBufferSize(previewSize.width, previewSize.height)
         val surface = Surface(st)
         previewSurface = surface
         main.post { listener.onPreviewSize(previewSize.width, previewSize.height) }
 
-        val still = StillPipeline(ctx, l, jpeg, raw, fullRes, handler, io) { text, ok ->
+        val finished: (String, Boolean) -> Unit = { text, ok ->
             main.post {
                 listener.onBusy(false)
                 listener.onMessage(text, ok)
             }
+        }
+        val still: Shooter = if (stack) {
+            StackPipeline(ctx, l, STACK_FRAMES, handler, io, finished)
+        } else {
+            StillPipeline(ctx, l, jpeg, raw, fullRes, handler, io, finished)
         }
 
         val previewCfg = OutputConfiguration(surface)
@@ -161,16 +168,18 @@ class CameraEngine(
                     session = s
                     pipeline = still
                     startPreview()
-                    val parts = listOfNotNull(
-                        still.jpegSize?.let { "JPEG ${it.width}x${it.height}" },
-                        still.rawSize?.let { "RAW ${it.width}x${it.height}" },
-                    )
-                    msg("${l.label}: ${parts.joinToString(" + ")}")
+                    msg("${l.label}: ${still.describe()}")
                 }
 
                 override fun onConfigureFailed(s: CameraCaptureSession) {
                     still.close()
                     when {
+                        stack -> {
+                            stack = false
+                            msg("Стекінг не підтримується цим об'єктивом — звичайна зйомка", false)
+                            main.post { listener.onModesChanged() }
+                            reconfigure()
+                        }
                         fullRes -> {
                             fullRes = false
                             msg("Full-res не підтримується цією комбінацією — стандартна роздільність", false)
@@ -214,6 +223,7 @@ class CameraEngine(
             val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val focus = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            if (iso != null) pipeline?.setIsoHint(iso)
             if (iso == null || exp == null) return
             val f = if (focus != null && focus > 0.01f) String.format("%.2fm", 1f / focus) else "∞"
             main.post { listener.onLive("ISO $iso · ${QualityProfile.formatShutter(exp)} · $f") }
@@ -244,7 +254,13 @@ class CameraEngine(
 
     private fun orientation(): Int {
         val so = lens?.chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-        return (so + deviceOrientation + 360) % 360
+        // Front sensors face the user, so the device rotation counts the other way.
+        val sign = if (lens?.front == true) -1 else 1
+        return (so + sign * deviceOrientation + 360) % 360
+    }
+
+    private companion object {
+        const val STACK_FRAMES = 8
     }
 
     fun capture() {
@@ -260,7 +276,7 @@ class CameraEngine(
         }
     }
 
-    private fun focusThenShoot(d: CameraDevice, s: CameraCaptureSession, p: StillPipeline, l: Lens) {
+    private fun focusThenShoot(d: CameraDevice, s: CameraCaptureSession, p: Shooter, l: Lens) {
         val surf = previewSurface ?: return
         try {
             val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
@@ -285,7 +301,7 @@ class CameraEngine(
         handler.postDelayed(poll, 60)
     }
 
-    private fun shoot(d: CameraDevice, s: CameraCaptureSession, p: StillPipeline, releaseAf: Boolean) {
+    private fun shoot(d: CameraDevice, s: CameraCaptureSession, p: Shooter, releaseAf: Boolean) {
         try {
             p.capture(d, s, state, orientation()) { if (releaseAf) releaseAfLock() }
         } catch (t: Throwable) {

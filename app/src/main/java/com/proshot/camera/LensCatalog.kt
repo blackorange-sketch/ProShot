@@ -26,6 +26,9 @@ data class Lens(
     val maxResJpegSize: Size?,
     /** Largest RAW size in ultra-high-resolution sensor mode, null when unavailable. */
     val maxResRawSize: Size?,
+    val front: Boolean,
+    /** Known sensor name for the Z50S Pro lens at this focal length, or empty. */
+    val sensor: String,
 ) {
     val supportsMaxRes: Boolean get() = maxResJpegSize != null
 }
@@ -39,7 +42,9 @@ object LensCatalog {
 
         for (id in mgr.cameraIdList) {
             val c = mgr.getCameraCharacteristics(id)
-            if (c.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) continue
+            val facing = c.get(CameraCharacteristics.LENS_FACING)
+            val front = facing == CameraCharacteristics.LENS_FACING_FRONT
+            if (facing != CameraCharacteristics.LENS_FACING_BACK && !front) continue
 
             val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
             val physicalIds = c.physicalCameraIds
@@ -49,16 +54,16 @@ object LensCatalog {
                 for (pid in physicalIds) {
                     val pc = runCatching { mgr.getCameraCharacteristics(pid) }.getOrNull() ?: c
                     val direct = pid in ids
-                    found.putIfAbsent(pid, build(if (direct) pid else id, if (direct) null else pid, pc))
+                    found.putIfAbsent(pid, build(if (direct) pid else id, if (direct) null else pid, pc, front))
                 }
             } else {
-                found.putIfAbsent(id, build(id, null, c))
+                found.putIfAbsent(id, build(id, null, c, front))
             }
         }
-        return found.values.sortedBy { it.equivMm }
+        return found.values.sortedWith(compareBy<Lens>({ it.front }, { it.equivMm }))
     }
 
-    private fun build(openId: String, physicalId: String?, c: CameraCharacteristics): Lens {
+    private fun build(openId: String, physicalId: String?, c: CameraCharacteristics, front: Boolean): Lens {
         val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
         val sensor = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         val equiv = if (sensor != null && focal > 0f) {
@@ -78,7 +83,15 @@ object LensCatalog {
             maxResRaw = mm?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
         }
 
+        val sensorName = when {
+            front -> "OV16A"
+            equiv in 10..17 -> "OV50D"
+            equiv in 28..42 -> "IMX800"
+            equiv in 65..100 -> "Hi-847"
+            else -> ""
+        }
         val role = when {
+            front -> "Front"
             equiv == 0 -> "Camera"
             equiv < 22 -> "Ultra-wide"
             equiv < 45 -> "Main"
@@ -98,11 +111,15 @@ object LensCatalog {
             jpegSize = jpegSize,
             maxResJpegSize = maxRes,
             maxResRawSize = maxResRaw,
+            front = front,
+            sensor = sensorName,
         )
     }
 
     fun describe(l: Lens): String = buildString {
-        append(l.label).append(" [id ").append(l.physicalId ?: l.openId).append("]\n")
+        append(l.label)
+        if (l.sensor.isNotEmpty()) append(" · ").append(l.sensor)
+        append(" [id ").append(l.physicalId ?: l.openId).append("]\n")
         l.jpegSize?.let { append("JPEG ${it.width}x${it.height}") }
         l.maxResJpegSize?.let { append(" | FULL ${it.width}x${it.height}") }
         append(if (l.supportsRaw) " | RAW ${l.rawSize!!.width}x${l.rawSize.height}" else " | no RAW")

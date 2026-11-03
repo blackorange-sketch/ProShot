@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "ProShot"
 include(":app")
+include(":detail")

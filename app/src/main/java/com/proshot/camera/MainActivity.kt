@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private val chips = mutableListOf<TextView>()
     private var current: Lens? = null
     private var ms = ManualState()
-    private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW
+    private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW, 3 = STACK
     private var fullRes = false
     private var surfaceReady = false
     private var opened = false
@@ -156,7 +156,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 status("Камери не знайдено", false)
                 return
             }
-            current = lenses.firstOrNull { it.equivMm in 22..44 } ?: lenses.first()
+            current = lenses.firstOrNull { !it.front && it.equivMm in 22..44 } ?: lenses.first()
         }
         opened = true
         applyLens(current ?: lenses.first())
@@ -186,7 +186,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         chips.forEachIndexed { i, c -> style(c, lenses[i] === l) }
         lensInfo.text = LensCatalog.describe(l)
 
-        if (!l.supportsRaw) fmt = 0
+        if (!l.supportsRaw && (fmt == 1 || fmt == 2)) fmt = 0
         if (!l.supportsMaxRes) fullRes = false
 
         val avail = l.chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet() ?: emptySet()
@@ -213,18 +213,16 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     }
 
     private fun pushModes() {
+        engine.stack = fmt == 3
         engine.wantJpeg = fmt != 1
-        engine.wantRaw = fmt != 0
-        engine.fullRes = fullRes
+        engine.wantRaw = fmt == 1 || fmt == 2
+        engine.fullRes = fullRes && fmt != 3
     }
 
     private fun cycleFormat() {
         val l = current ?: return
-        if (!l.supportsRaw) {
-            status("RAW недоступний для цього об'єктива", false)
-            return
-        }
-        fmt = (fmt + 1) % 3
+        val order = if (l.supportsRaw) listOf(0, 1, 2, 3) else listOf(0, 3)
+        fmt = order[(order.indexOf(fmt) + 1) % order.size]
         refreshToggles()
         pushModes()
         engine.reconfigure()
@@ -234,6 +232,10 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         val l = current ?: return
         if (!l.supportsMaxRes) {
             status("Full-res недоступний для цього об'єктива", false)
+            return
+        }
+        if (fmt == 3) {
+            status("STACK працює у стандартній роздільності — для FULL вимкни STACK", false)
             return
         }
         fullRes = !fullRes
@@ -259,13 +261,14 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     private fun refreshToggles() {
         val l = current
-        btnFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW")[fmt]
+        btnFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×8")[fmt]
         style(btnFormat, fmt != 0)
 
         val std = l?.jpegSize?.let { "${mp(it.width, it.height)}MP" } ?: ""
         val full = l?.maxResJpegSize?.let { "${mp(it.width, it.height)}MP" }
-        btnRes.text = if (fullRes && full != null) "FULL $full" else "STD $std"
-        style(btnRes, fullRes)
+        val fullOn = fullRes && fmt != 3
+        btnRes.text = if (fullOn && full != null) "FULL $full" else "STD $std"
+        style(btnRes, fullOn)
 
         btnMode.text = if (ms.manualExposure) "MANUAL" else "AUTO"
         style(btnMode, ms.manualExposure)
@@ -390,7 +393,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     }
 
     override fun onModesChanged() {
-        fmt = if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
+        fmt = if (engine.stack) 3 else if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
         fullRes = engine.fullRes
         refreshToggles()
     }

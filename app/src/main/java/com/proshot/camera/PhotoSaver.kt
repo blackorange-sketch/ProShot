@@ -23,6 +23,19 @@ object PhotoSaver {
         return write(ctx, "$baseName.jpg", "image/jpeg") { it.write(bytes) }
     }
 
+    /** Saves an already encoded JPEG and stamps the EXIF orientation afterwards. */
+    fun saveJpegBytes(ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int): Uri? {
+        val uri = write(ctx, "$baseName.jpg", "image/jpeg") { it.write(bytes) } ?: return null
+        runCatching {
+            ctx.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                val ex = ExifInterface(pfd.fileDescriptor)
+                ex.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation(jpegOrientation).toString())
+                ex.saveAttributes()
+            }
+        }
+        return uri
+    }
+
     fun saveDng(
         ctx: Context,
         chars: CameraCharacteristics,

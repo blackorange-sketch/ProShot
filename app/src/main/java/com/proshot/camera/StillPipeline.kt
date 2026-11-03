@@ -33,15 +33,15 @@ class StillPipeline(
     private val handler: Handler,
     private val io: ExecutorService,
     private val onFinished: (message: String, ok: Boolean) -> Unit,
-) {
+) : Shooter {
     private val maxRes = fullRes && lens.supportsMaxRes && Build.VERSION.SDK_INT >= 31
 
-    val jpegSize: Size? = when {
+    override val jpegSize: Size? = when {
         !wantJpeg -> null
         maxRes -> lens.maxResJpegSize
         else -> lens.jpegSize
     }
-    val rawSize: Size? = when {
+    override val rawSize: Size? = when {
         !rawRequested || !lens.supportsRaw -> null
         maxRes -> lens.maxResRawSize
         else -> lens.rawSize
@@ -64,7 +64,7 @@ class StillPipeline(
     private var job: Job? = null
 
     @Volatile
-    var busy = false
+    override var busy = false
         private set
 
     init {
@@ -73,7 +73,12 @@ class StillPipeline(
     }
 
     /** Output configurations to add to the camera session. */
-    fun outputConfigs(): List<OutputConfiguration> =
+    override fun describe(): String = listOfNotNull(
+        jpegSize?.let { "JPEG ${it.width}x${it.height}" },
+        rawSize?.let { "RAW ${it.width}x${it.height}" },
+    ).joinToString(" + ")
+
+    override fun outputConfigs(): List<OutputConfiguration> =
         listOfNotNull(jpegReader?.surface, rawReader?.surface).map { config(it) }
 
     private fun config(s: Surface): OutputConfiguration {
@@ -87,13 +92,12 @@ class StillPipeline(
 
     private var afterCapture: (() -> Unit)? = null
 
-    /** [onExposed] runs once the sensor frame is done (before saving), e.g. to release an AF lock. */
-    fun capture(
+    override fun capture(
         device: CameraDevice,
         session: CameraCaptureSession,
         state: ManualState,
         orientation: Int,
-        onExposed: (() -> Unit)? = null,
+        onExposed: (() -> Unit)?,
     ) {
         if (busy) return
         afterCapture = onExposed
@@ -171,7 +175,7 @@ class StillPipeline(
         j.raw = null
     }
 
-    fun close() {
+    override fun close() {
         job?.let { discard(it) }
         job = null
         runCatching { jpegReader?.close() }
