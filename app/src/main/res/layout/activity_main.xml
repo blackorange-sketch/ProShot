@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical">
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/lensBar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="6dp" />
+    </HorizontalScrollView>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <com.proshot.camera.AutoFitTextureView
+            android:id="@+id/preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
+
+        <TextView
+            android:id="@+id/liveText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:background="#99000000"
+            android:padding="4dp"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:background="#99000000"
+            android:padding="4dp"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/lensInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="8dp"
+        android:textColor="#9E9E9E"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="6dp">
+
+        <TextView
+            android:id="@+id/btnFormat"
+            style="@style/ProToggle" />
+
+        <TextView
+            android:id="@+id/btnRes"
+            style="@style/ProToggle" />
+
+        <TextView
+            android:id="@+id/btnMode"
+            style="@style/ProToggle" />
+
+        <TextView
+            android:id="@+id/btnWb"
+            style="@style/ProToggle" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="10dp">
+
+        <LinearLayout
+            android:id="@+id/rowIso"
+            style="@style/ProRow">
+
+            <TextView
+                android:id="@+id/labelIso"
+                style="@style/ProLabel" />
+
+            <SeekBar
+                android:id="@+id/seekIso"
+                style="@style/ProSeek" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowShutter"
+            style="@style/ProRow">
+
+            <TextView
+                android:id="@+id/labelShutter"
+                style="@style/ProLabel" />
+
+            <SeekBar
+                android:id="@+id/seekShutter"
+                style="@style/ProSeek" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowEv"
+            style="@style/ProRow">
+
+            <TextView
+                android:id="@+id/labelEv"
+                style="@style/ProLabel" />
+
+            <SeekBar
+                android:id="@+id/seekEv"
+                style="@style/ProSeek" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/ProRow">
+
+            <TextView
+                android:id="@+id/labelFocus"
+                style="@style/ProLabel" />
+
+            <SeekBar
+                android:id="@+id/seekFocus"
+                style="@style/ProSeek" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="14dp"
+        android:paddingTop="6dp">
+
+        <View
+            android:id="@+id/btnShutter"
+            android:layout_width="76dp"
+            android:layout_height="76dp"
+            android:layout_gravity="center"
+            android:background="@drawable/shutter" />
+    </FrameLayout>
+</LinearLayout>
