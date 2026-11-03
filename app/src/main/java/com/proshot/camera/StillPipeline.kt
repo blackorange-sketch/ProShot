@@ -80,7 +80,7 @@ class StillPipeline(
         val oc = OutputConfiguration(s)
         lens.physicalId?.let { oc.setPhysicalCameraId(it) }
         if (maxRes && Build.VERSION.SDK_INT >= 31) {
-            oc.addSensorPixelMode(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
+            oc.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
         }
         return oc
     }
