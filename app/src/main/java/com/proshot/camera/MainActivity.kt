@@ -81,7 +81,12 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private var current: Lens? = null
     private var lastBack: Lens? = null
     private var ms = ManualState()
-    private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW, 3 = STACK
+    private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW, 3 = STACK (YUV), 4 = RAW-STACK
+
+    private fun isStack() = fmt == 3 || fmt == 4
+
+    /** The best stacking mode this lens offers. */
+    private fun stackFmt(l: Lens) = if (RawStackPipeline.supported(l)) 4 else 3
     private var fullRes = false
     private var superSample = false
     private var gridOn = false
@@ -259,7 +264,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
         val scaler = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
-                if (fullRes && fmt != 3) {
+                if (fullRes && !isStack()) {
                     status("Для зуму вимкни FULL (50 МП)", false)
                     return false
                 }
@@ -448,12 +453,13 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         totalZoom = maxOf(total, ratioOf(l))
         if (autoStackActive) {
             autoStackActive = false
-            if (fmt == 3) fmt = 0
+            if (isStack()) fmt = 0
         }
         faceBox.setBox(null)
         lensInfo.text = LensCatalog.describe(l)
 
         if (!l.supportsRaw && (fmt == 1 || fmt == 2)) fmt = 0
+        if (fmt == 4 && !RawStackPipeline.supported(l)) fmt = 3
         if (!l.supportsMaxRes) {
             fullRes = false
             superSample = false
@@ -501,16 +507,17 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     // ---------------------------------------------------------------- modes and toggles
 
     private fun pushModes() {
-        engine.stack = fmt == 3
+        engine.stack = isStack()
+        engine.rawStack = fmt == 4
         engine.wantJpeg = fmt != 1
         engine.wantRaw = fmt == 1 || fmt == 2
-        engine.fullRes = fullRes && fmt != 3
-        engine.superSample = fullRes && superSample && fmt != 3
+        engine.fullRes = fullRes && !isStack()
+        engine.superSample = fullRes && superSample && !isStack()
     }
 
     private fun currentMode() = when {
         ms.manualExposure -> 3
-        fmt == 3 -> 1
+        isStack() -> 1
         fmt == 1 || fmt == 2 -> 2
         else -> 0
     }
@@ -535,7 +542,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             }
             1 -> {
                 ms = ms.copy(manualExposure = false)
-                fmt = 3
+                fmt = stackFmt(l)
             }
             2 -> {
                 if (!l.supportsRaw) {
@@ -547,7 +554,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             }
             else -> {
                 ms = ms.copy(manualExposure = true)
-                if (l.supportsRaw && (fmt == 0 || fmt == 3)) fmt = 2
+                if (l.supportsRaw && (fmt == 0 || isStack())) fmt = 2
             }
         }
         refreshToggles()
@@ -559,7 +566,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private fun cycleFormat() {
         val l = current ?: return
         userChoseMode()
-        val order = if (l.supportsRaw) listOf(0, 1, 2, 3) else listOf(0, 3)
+        val order = if (l.supportsRaw) listOf(0, 1, 2, 4, 3) else listOf(0, 3)
         fmt = order[(order.indexOf(fmt) + 1) % order.size]
         refreshToggles()
         pushModes()
@@ -572,7 +579,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             status("Full-res недоступний для цього об'єктива", false)
             return
         }
-        if (fmt == 3) {
+        if (isStack()) {
             status("СТЕК працює у стандартній роздільності — для FULL вимкни СТЕК", false)
             return
         }
@@ -615,12 +622,12 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         val l = current
 
         val stackN = l?.let { LensProfiles.forLens(it).stackFrames } ?: 8
-        chipFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×$stackN")[fmt]
+        chipFormat.text = arrayOf("JPEG", "RAW", "JPEG+RAW", "STACK ×$stackN", "RAW-STACK ×$stackN")[fmt]
         chip(chipFormat, fmt != 0)
 
         val std = l?.jpegSize?.let { "${mp(it.width, it.height)}MP" } ?: ""
         val full = l?.maxResJpegSize?.let { "${mp(it.width, it.height)}MP" }
-        val fullOn = fullRes && fmt != 3
+        val fullOn = fullRes && !isStack()
         chipRes.text = when {
             fullOn && full != null && superSample -> "SUPER $full→$std"
             fullOn && full != null -> "FULL $full"
@@ -841,7 +848,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private fun revertAutoStack() {
         if (!autoStackActive) return
         autoStackActive = false
-        if (fmt == 3) {
+        if (isStack()) {
             fmt = 0
             refreshToggles()
             pushModes()
@@ -851,8 +858,9 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     override fun onSmartStack(wanted: Boolean) {
         if (!smartOn || shooting || ms.manualExposure || SystemClock.uptimeMillis() < autoHoldUntil) return
+        val cur = current ?: return
         if (wanted && fmt == 0 && !fullRes) {
-            fmt = 3
+            fmt = stackFmt(cur)
             autoStackActive = true
             refreshToggles()
             pushModes()
@@ -877,7 +885,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
     override fun onModesChanged() {
         if (!engine.stack) autoStackActive = false
-        fmt = if (engine.stack) 3 else if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
+        fmt = if (engine.stack) (if (engine.rawStack) 4 else 3) else if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
         fullRes = engine.fullRes
         superSample = engine.superSample
         refreshToggles()

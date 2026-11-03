@@ -73,6 +73,8 @@ class CameraEngine(
     @Volatile var superSample = false
     /** Multi-frame stacking mode (works at the binned resolution, so it overrides full-res). */
     @Volatile var stack = false
+    /** With [stack]: merge RAW frames (needs a lens with Bayer RAW), otherwise YUV frames. */
+    @Volatile var rawStack = false
     @Volatile var deviceOrientation = 0
 
     @Volatile private var afState: Int? = null
@@ -206,7 +208,11 @@ class CameraEngine(
             }
         }
         val still: Shooter = if (stack) {
-            StackPipeline(ctx, l, handler, io, finished)
+            if (rawStack && RawStackPipeline.supported(l)) {
+                RawStackPipeline(ctx, l, handler, io, finished)
+            } else {
+                StackPipeline(ctx, l, handler, io, finished)
+            }
         } else {
             StillPipeline(ctx, l, jpeg, raw, fullRes, superSample, handler, io, finished)
         }
@@ -229,6 +235,12 @@ class CameraEngine(
                 override fun onConfigureFailed(s: CameraCaptureSession) {
                     still.close()
                     when {
+                        stack && rawStack -> {
+                            rawStack = false
+                            msg("RAW-стек не підтримується цим об'єктивом — звичайний STACK", false)
+                            main.post { listener.onModesChanged() }
+                            reconfigure()
+                        }
                         stack -> {
                             stack = false
                             msg("Стекінг не підтримується цим об'єктивом — звичайна зйомка", false)
