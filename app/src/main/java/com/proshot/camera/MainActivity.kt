@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
     }
 
-    private val hideStatus = Runnable { statusText.visibility = View.GONE }
+    private val hideStatus = Runnable { Motion.setVisible(statusText, false, -dp(8).toFloat()) }
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) startUp() else status("Потрібен дозвіл на камеру", false)
@@ -305,7 +305,20 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
 
         btnShutter.setOnClickListener { shutter() }
-        btnFlip.setOnClickListener { flipCamera() }
+        btnFlip.setOnClickListener {
+            btnFlip.animate().rotationBy(180f).setDuration(350).start()
+            flipCamera()
+        }
+        listOf<View>(chipFormat, chipRes, chipQ, chipWb, chipGrid, chipAuto, btnExpand, thumb, btnFlip).forEach { Motion.pressable(it) }
+        Motion.pressable(btnShutter, 0.88f)
+        lensInfo.setOnLongClickListener {
+            Thread {
+                val msg = runCatching { "Дамп камер збережено: Download/" + CameraDump.write(this) }
+                    .getOrElse { "Дамп не вдався: ${it.message}" }
+                runOnUiThread { status(msg, msg.startsWith("Дамп камер")) }
+            }.start()
+            true
+        }
         thumb.setOnClickListener { openGallery() }
         chipFormat.setOnClickListener { cycleFormat() }
         chipRes.setOnClickListener { toggleRes() }
@@ -424,6 +437,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             }
             if (sel) selLensView = tv
             val size = dp(if (sel) 48 else 36)
+            if (sel) Motion.pop(tv, 0.75f) else Motion.appear(tv, 40L * lensBar.childCount)
             lensBar.addView(tv, LinearLayout.LayoutParams(size, size).apply {
                 marginStart = dp(7)
                 marginEnd = dp(7)
@@ -659,16 +673,26 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
 
         val mode = currentMode()
         modes.forEachIndexed { i, tv ->
-            tv.setTextColor(if (i == mode) 0xFFFF3B30.toInt() else Color.WHITE)
-            tv.paint.isFakeBoldText = i == mode
+            val on = i == mode
+            val to = if (on) 0xFFFF3B30.toInt() else Color.WHITE
+            val from = tv.currentTextColor
+            if (from != to) {
+                android.animation.ValueAnimator.ofObject(android.animation.ArgbEvaluator(), from, to).apply {
+                    duration = 200
+                    addUpdateListener { tv.setTextColor(it.animatedValue as Int) }
+                    start()
+                }
+            }
+            tv.paint.isFakeBoldText = on
+            tv.animate().scaleX(if (on) 1.12f else 1f).scaleY(if (on) 1.12f else 1f).setDuration(180).start()
             tv.invalidate()
         }
 
-        proPanel.visibility = if (ms.manualExposure || panelOpen) View.VISIBLE else View.GONE
+        Motion.setVisible(proPanel, ms.manualExposure || panelOpen)
         rowIso.visibility = if (ms.manualExposure) View.VISIBLE else View.GONE
         rowShutter.visibility = if (ms.manualExposure) View.VISIBLE else View.GONE
         rowEv.visibility = if (ms.manualExposure) View.GONE else View.VISIBLE
-        btnExpand.rotation = if (panelOpen) 180f else 0f
+        btnExpand.animate().rotation(if (panelOpen) 180f else 0f).setDuration(220).start()
     }
 
     // ---------------------------------------------------------------- shutter, focus, gallery
@@ -722,8 +746,12 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 uri?.let { bmp = contentResolver.loadThumbnail(it, Size(160, 160), null) }
             }
             runOnUiThread {
+                val changed = uri != lastUri
                 lastUri = uri
-                bmp?.let { thumb.setImageBitmap(it) }
+                bmp?.let {
+                    thumb.setImageBitmap(it)
+                    if (changed) Motion.pop(thumb, 0.6f)
+                }
             }
         }.start()
     }
@@ -824,7 +852,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         statusText.removeCallbacks(hideStatus)
         statusText.text = text
         statusText.setTextColor(if (ok) Color.WHITE else 0xFFFF8A80.toInt())
-        statusText.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        if (text.isEmpty()) Motion.setVisible(statusText, false, -dp(8).toFloat()) else Motion.setVisible(statusText, true, -dp(8).toFloat())
         statusText.postDelayed(hideStatus, if (ok) 3000L else 5000L)
     }
 
@@ -842,9 +870,17 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         if (ok && text.startsWith("Збережено")) thumb.postDelayed({ refreshThumb() }, 400)
     }
 
+    private var shutterPulse: android.animation.ObjectAnimator? = null
+
     override fun onBusy(busy: Boolean) {
         shooting = busy
-        btnShutter.alpha = if (busy) 0.45f else 1f
+        shutterPulse?.cancel()
+        shutterPulse = null
+        if (busy) {
+            shutterPulse = Motion.pulse(btnShutter)
+        } else {
+            btnShutter.animate().alpha(1f).setDuration(160).start()
+        }
     }
 
     override fun onFace(box: RectF?) {
