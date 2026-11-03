@@ -182,9 +182,9 @@ class StackPipeline(
                 "ProShot STACK ${s.frames}x ($engineName${if (optics) " + optics" else ""})",
                 upright.width, upright.height,
             )
-            PhotoSaver.saveJpegBytes(ctx, jpeg, base, 0, meta)
+            val sv = PhotoSaver.saveJpegStamped(ctx, jpeg, base, 0, meta)
             busy = false
-            onFinished("Збережено STACK ${s.frames}× ($engineName${if (optics) " + оптика" else ""}): $base", true)
+            onFinished("Збережено STACK ${s.frames}× ($engineName${if (optics) " + оптика" else ""}): $base [px ${upright.width}x${upright.height} ${sv.note}]", true)
         } catch (t: Throwable) {
             busy = false
             onFinished("Помилка стекінгу: ${t.message}", false)

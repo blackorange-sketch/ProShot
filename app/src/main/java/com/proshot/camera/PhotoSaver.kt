@@ -27,55 +27,71 @@ object PhotoSaver {
         return write(ctx, "$baseName.jpg", "image/jpeg") { it.write(bytes) }
     }
 
-    /** Saves an already encoded JPEG and stamps the EXIF orientation afterwards. */
+    class Saved(val uri: Uri?, val note: String)
+
+    /** Saves an already encoded JPEG; EXIF (orientation, shooting data) is stamped on a real temp file first. */
     fun saveJpegBytes(
         ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int, meta: ShotMeta? = null,
-    ): Uri? {
-        val uri = write(ctx, "$baseName.jpg", "image/jpeg") { it.write(bytes) } ?: return null
-        stampExif(ctx, uri, meta, jpegOrientation)
-        return uri
+    ): Uri? = saveJpegStamped(ctx, bytes, baseName, jpegOrientation, meta).uri
+
+    /**
+     * Stamping through a file descriptor of a MediaStore entry proved unreliable, so the bytes get their EXIF
+     * on a temp file in the app cache and only then go to MediaStore. [Saved.note] reports what was read back.
+     */
+    fun saveJpegStamped(
+        ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int, meta: ShotMeta? = null,
+    ): Saved {
+        var data = bytes
+        var note: String
+        try {
+            val tmp = java.io.File(ctx.cacheDir, "stamp_${System.nanoTime()}.jpg")
+            try {
+                tmp.writeBytes(bytes)
+                val ex = ExifInterface(tmp.absolutePath)
+                applyExif(ex, meta, jpegOrientation)
+                ex.saveAttributes()
+                note = "tag=" + ExifInterface(tmp.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, -1)
+                data = tmp.readBytes()
+            } finally {
+                tmp.delete()
+            }
+        } catch (t: Throwable) {
+            note = "exif-fail:" + t.message
+        }
+        val uri = write(ctx, "$baseName.jpg", "image/jpeg") { it.write(data) }
+        return Saved(uri, note)
     }
 
-    /** Writes orientation and shooting data (device, lens, ISO, shutter, aperture, focal length) into the JPEG. */
-    fun stampExif(ctx: Context, uri: Uri, meta: ShotMeta?, jpegOrientation: Int? = null) {
-        runCatching {
-            ctx.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
-                val ex = ExifInterface(pfd.fileDescriptor)
-                if (jpegOrientation != null) {
-                    ex.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation(jpegOrientation).toString())
-                }
-                if (meta != null) {
-                    val now = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
-                    ex.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
-                    ex.setAttribute(ExifInterface.TAG_MODEL, if (Build.MODEL == "NX713J") "nubia Z50S Pro" else Build.MODEL)
-                    ex.setAttribute(ExifInterface.TAG_SOFTWARE, meta.software)
-                    ex.setAttribute(ExifInterface.TAG_DATETIME, now)
-                    ex.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, now)
-                    ex.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, now)
-                    meta.exposureNs?.let {
-                        ex.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, (it / 1e9).toString())
-                    }
-                    meta.iso?.let { ex.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, it.toString()) }
-                    meta.aperture?.let { ex.setAttribute(ExifInterface.TAG_F_NUMBER, it.toString()) }
-                    if (meta.focalMm > 0f) ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, meta.focalMm.toString())
-                    if (meta.lens.equivMm > 0) {
-                        ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, meta.lens.equivMm.toString())
-                    }
-                    ex.setAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE, meta.evComp.toString())
-                    ex.setAttribute(ExifInterface.TAG_FLASH, "0")
-                    ex.setAttribute(ExifInterface.TAG_WHITE_BALANCE, if (meta.wbAuto) "0" else "1")
-                    ex.setAttribute(ExifInterface.TAG_EXPOSURE_PROGRAM, "2")
-                    ex.setAttribute(ExifInterface.TAG_LENS_MAKE, Build.MANUFACTURER)
-                    ex.setAttribute(
-                        ExifInterface.TAG_LENS_MODEL,
-                        listOf(meta.lens.label, meta.lens.sensor).filter { it.isNotEmpty() }.joinToString(" "),
-                    )
-                    meta.width?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, it.toString()) }
-                    meta.height?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, it.toString()) }
-                }
-                ex.saveAttributes()
-            }
+    private fun applyExif(ex: ExifInterface, meta: ShotMeta?, jpegOrientation: Int?) {
+        if (jpegOrientation != null) {
+            ex.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation(jpegOrientation).toString())
         }
+        if (meta == null) return
+        val now = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+        ex.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
+        ex.setAttribute(ExifInterface.TAG_MODEL, if (Build.MODEL == "NX713J") "nubia Z50S Pro" else Build.MODEL)
+        ex.setAttribute(ExifInterface.TAG_SOFTWARE, meta.software)
+        ex.setAttribute(ExifInterface.TAG_DATETIME, now)
+        ex.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, now)
+        ex.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, now)
+        meta.exposureNs?.let { ex.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, (it / 1e9).toString()) }
+        meta.iso?.let { ex.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, it.toString()) }
+        meta.aperture?.let { ex.setAttribute(ExifInterface.TAG_F_NUMBER, it.toString()) }
+        if (meta.focalMm > 0f) ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, meta.focalMm.toString())
+        if (meta.lens.equivMm > 0) {
+            ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, meta.lens.equivMm.toString())
+        }
+        ex.setAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE, meta.evComp.toString())
+        ex.setAttribute(ExifInterface.TAG_FLASH, "0")
+        ex.setAttribute(ExifInterface.TAG_WHITE_BALANCE, if (meta.wbAuto) "0" else "1")
+        ex.setAttribute(ExifInterface.TAG_EXPOSURE_PROGRAM, "2")
+        ex.setAttribute(ExifInterface.TAG_LENS_MAKE, Build.MANUFACTURER)
+        ex.setAttribute(
+            ExifInterface.TAG_LENS_MODEL,
+            listOf(meta.lens.label, meta.lens.sensor).filter { it.isNotEmpty() }.joinToString(" "),
+        )
+        meta.width?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, it.toString()) }
+        meta.height?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, it.toString()) }
     }
 
     fun saveDng(

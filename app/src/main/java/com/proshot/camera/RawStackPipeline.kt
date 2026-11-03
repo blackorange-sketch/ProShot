@@ -284,9 +284,9 @@ class RawStackPipeline(
                 "ProShot RAW-STACK ${s.frames}x" + (if (optics) " + optics" else ""),
                 upright.width, upright.height,
             )
-            PhotoSaver.saveJpegBytes(ctx, jpeg, base, 0, shot)
+            val sv = PhotoSaver.saveJpegStamped(ctx, jpeg, base, 0, shot)
             busy = false
-            onFinished("Збережено RAW-STACK ${s.frames}×: $base", true)
+            onFinished("Збережено RAW-STACK ${s.frames}×: $base [px ${upright.width}x${upright.height} ${sv.note}]", true)
         } catch (t: Throwable) {
             busy = false
             onFinished("Помилка RAW-стеку: ${t.message}", false)

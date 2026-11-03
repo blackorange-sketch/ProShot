@@ -178,20 +178,30 @@ class StillPipeline(
         io.execute {
             try {
                 val parts = mutableListOf<String>()
+                val notes = mutableListOf<String>()
                 j.jpeg?.let {
-                    val processed = processJpeg && saveProcessed(it, j, result)
-                    if (!processed) {
-                        val uri = PhotoSaver.saveJpeg(ctx, it, j.base)
-                        if (uri != null) {
-                            val sw = if (maxRes) "ProShot FULL" else "ProShot"
-                            PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height), j.orientation)
-                        }
+                    var processed = false
+                    var diag = ""
+                    if (processJpeg) {
+                        val r = saveProcessed(it, j, result)
+                        processed = r.first
+                        diag = r.second
                     }
+                    if (!processed) {
+                        val buf = it.planes[0].buffer
+                        val bytes = ByteArray(buf.remaining())
+                        buf.get(bytes)
+                        val sw = if (maxRes) "ProShot FULL" else "ProShot"
+                        val meta = ShotMeta.from(lens, result, j.state, sw, it.width, it.height)
+                        val sv = PhotoSaver.saveJpegStamped(ctx, bytes, j.base, j.orientation, meta)
+                        diag += (if (diag.isNotEmpty()) " >> " else "") + "камерний JPEG ${sv.note}"
+                    }
+                    notes += diag
                     parts += if (processed) (if (superSample) "JPEG SR" else "JPEG+") else "JPEG"
                 }
                 j.raw?.let { PhotoSaver.saveDng(ctx, lens.chars, result, it, j.orientation, j.base); parts += "DNG" }
                 busy = false
-                onFinished("Збережено ${parts.joinToString("+")}: ${j.base}", true)
+                onFinished("Збережено ${parts.joinToString("+")}: ${j.base}" + (if (notes.isEmpty()) "" else " [${notes.joinToString("; ")}]"), true)
             } catch (t: Throwable) {
                 busy = false
                 onFinished("Помилка збереження: ${t.message}", false)
@@ -203,10 +213,10 @@ class StillPipeline(
 
     /**
      * Decodes the camera JPEG (at half size when [superSample], which averages 2x2 pixels of the 50 MP
-     * frame), runs the detail library's finishing pass and saves the result. Returns false on any
+     * frame), runs the detail library's finishing pass and saves the result. Returns false (plus a diagnostic text) on any
      * failure so the caller can save the untouched camera JPEG instead.
      */
-    private fun saveProcessed(img: Image, j: Job, result: TotalCaptureResult): Boolean = try {
+    private fun saveProcessed(img: Image, j: Job, result: TotalCaptureResult): Pair<Boolean, String> = try {
         val buf = img.planes[0].buffer
         val bytes = ByteArray(buf.remaining())
         buf.get(bytes)
@@ -223,9 +233,10 @@ class StillPipeline(
         val jpeg = YuvConvert.toJpeg(upright, 100)
         val sw = (if (superSample) "ProShot SUPER 50>12MP" else "ProShot DETAIL") + (if (optics) " + optics" else "")
         val meta = ShotMeta.from(lens, result, j.state, sw, upright.width, upright.height)
-        PhotoSaver.saveJpegBytes(ctx, jpeg, j.base, 0, meta) != null
+        val sv = PhotoSaver.saveJpegStamped(ctx, jpeg, j.base, 0, meta)
+        (sv.uri != null) to "px ${upright.width}x${upright.height} ${sv.note}"
     } catch (t: Throwable) {
-        false
+        false to "обробка не вдалася: ${t::class.java.simpleName} ${t.message}"
     }
 
     private fun discard(j: Job) {
