@@ -47,7 +47,7 @@ object PhotoSaver {
                 if (meta != null) {
                     val now = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
                     ex.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
-                    ex.setAttribute(ExifInterface.TAG_MODEL, Build.MODEL)
+                    ex.setAttribute(ExifInterface.TAG_MODEL, if (Build.MODEL == "NX713J") "nubia Z50S Pro" else Build.MODEL)
                     ex.setAttribute(ExifInterface.TAG_SOFTWARE, meta.software)
                     ex.setAttribute(ExifInterface.TAG_DATETIME, now)
                     ex.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, now)

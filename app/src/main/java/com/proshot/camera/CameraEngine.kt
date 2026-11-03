@@ -69,6 +69,8 @@ class CameraEngine(
     @Volatile var wantJpeg = true
     @Volatile var wantRaw = false
     @Volatile var fullRes = false
+    /** With [fullRes]: shoot 50 MP and downscale 2x for a cleaner, more detailed 12 MP image. */
+    @Volatile var superSample = false
     /** Multi-frame stacking mode (works at the binned resolution, so it overrides full-res). */
     @Volatile var stack = false
     @Volatile var deviceOrientation = 0
@@ -206,7 +208,7 @@ class CameraEngine(
         val still: Shooter = if (stack) {
             StackPipeline(ctx, l, handler, io, finished)
         } else {
-            StillPipeline(ctx, l, jpeg, raw, fullRes, handler, io, finished)
+            StillPipeline(ctx, l, jpeg, raw, fullRes, superSample, handler, io, finished)
         }
 
         val previewCfg = OutputConfiguration(surface)
@@ -235,6 +237,7 @@ class CameraEngine(
                         }
                         fullRes -> {
                             fullRes = false
+                            superSample = false
                             msg("Full-res не підтримується цією комбінацією — стандартна роздільність", false)
                             main.post { listener.onModesChanged() }
                             reconfigure()

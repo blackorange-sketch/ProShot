@@ -31,14 +31,14 @@ object LensProfiles {
         name = "Main 35mm · IMX800",
         stackFrames = 6,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_FAST,
-        post = PostParams(sharpenAmount = 0.55f, sharpenRadius = 1.2f, sharpenThreshold = 3, cornerBoost = 0.2f, chromaDenoise = 0.3f),
+        post = PostParams(sharpenAmount = 0.9f, sharpenRadius = 1.0f, sharpenThreshold = 3, cornerBoost = 0.2f, chromaDenoise = 0.3f, clarity = 0.25f),
     )
 
     private val ULTRAWIDE = LensProfile(
         name = "Ultra-wide 13mm · OV50D",
         stackFrames = 8,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
-        post = PostParams(sharpenAmount = 0.7f, sharpenRadius = 1.3f, sharpenThreshold = 3, cornerBoost = 0.9f, chromaDenoise = 0.45f),
+        post = PostParams(sharpenAmount = 0.95f, sharpenRadius = 1.0f, sharpenThreshold = 3, cornerBoost = 0.9f, chromaDenoise = 0.45f, clarity = 0.2f),
         vignetteIfUncorrected = 0.25f,
     )
 
@@ -46,7 +46,7 @@ object LensProfiles {
         name = "Tele 80mm · Hi-847",
         stackFrames = 10,
         stillNoiseReduction = CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY,
-        post = PostParams(sharpenAmount = 0.8f, sharpenRadius = 1.4f, sharpenThreshold = 4, cornerBoost = 0.1f, chromaDenoise = 0.6f),
+        post = PostParams(sharpenAmount = 0.9f, sharpenRadius = 1.2f, sharpenThreshold = 4, cornerBoost = 0.1f, chromaDenoise = 0.6f, clarity = 0.2f),
     )
 
     private val FRONT = LensProfile(

@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
     private var ms = ManualState()
     private var fmt = 0 // 0 = JPEG, 1 = RAW, 2 = JPEG+RAW, 3 = STACK
     private var fullRes = false
+    private var superSample = false
     private var gridOn = false
     private var panelOpen = false
     private var shooting = false
@@ -453,7 +454,10 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         lensInfo.text = LensCatalog.describe(l)
 
         if (!l.supportsRaw && (fmt == 1 || fmt == 2)) fmt = 0
-        if (!l.supportsMaxRes) fullRes = false
+        if (!l.supportsMaxRes) {
+            fullRes = false
+            superSample = false
+        }
 
         val avail = l.chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet() ?: emptySet()
         wbModes = listOf(
@@ -501,6 +505,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         engine.wantJpeg = fmt != 1
         engine.wantRaw = fmt == 1 || fmt == 2
         engine.fullRes = fullRes && fmt != 3
+        engine.superSample = fullRes && superSample && fmt != 3
     }
 
     private fun currentMode() = when {
@@ -571,7 +576,15 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             status("СТЕК працює у стандартній роздільності — для FULL вимкни СТЕК", false)
             return
         }
-        fullRes = !fullRes
+        // STD -> FULL (50 MP) -> SUPER (50 MP downscaled to 12 MP) -> STD
+        when {
+            !fullRes -> fullRes = true
+            !superSample -> superSample = true
+            else -> {
+                fullRes = false
+                superSample = false
+            }
+        }
         if (fullRes && ms.zoom > 1f) {
             // Digital zoom is not available in the full-resolution sensor mode.
             totalZoom = ratioOf(l)
@@ -608,7 +621,11 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         val std = l?.jpegSize?.let { "${mp(it.width, it.height)}MP" } ?: ""
         val full = l?.maxResJpegSize?.let { "${mp(it.width, it.height)}MP" }
         val fullOn = fullRes && fmt != 3
-        chipRes.text = if (fullOn && full != null) "FULL $full" else "STD $std"
+        chipRes.text = when {
+            fullOn && full != null && superSample -> "SUPER $full→$std"
+            fullOn && full != null -> "FULL $full"
+            else -> "STD $std"
+        }
         chip(chipRes, fullOn)
 
         chipWb.text = wbModes.firstOrNull { it.first == ms.awbMode }?.second ?: "WB"
@@ -862,6 +879,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         if (!engine.stack) autoStackActive = false
         fmt = if (engine.stack) 3 else if (engine.wantRaw) (if (engine.wantJpeg) 2 else 1) else 0
         fullRes = engine.fullRes
+        superSample = engine.superSample
         refreshToggles()
     }
 

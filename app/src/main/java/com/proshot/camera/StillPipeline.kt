@@ -1,6 +1,8 @@
 package com.proshot.camera
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
@@ -15,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.util.Size
 import android.view.Surface
+import com.proshot.detail.Finisher
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +33,7 @@ class StillPipeline(
     wantJpeg: Boolean,
     rawRequested: Boolean,
     fullRes: Boolean,
+    private val superSample: Boolean,
     private val handler: Handler,
     private val io: ExecutorService,
     private val onFinished: (message: String, ok: Boolean) -> Unit,
@@ -46,6 +50,10 @@ class StillPipeline(
         maxRes -> lens.maxResRawSize
         else -> lens.rawSize
     }
+
+    /** Decode, sharpen and re-encode the JPEG ourselves: from 50 MP downscaled 2x, or the standard frame. */
+    private val processJpeg = (jpegSize?.let { it.width.toLong() * it.height <= 16_500_000L } == true && !maxRes) ||
+        (superSample && maxRes && jpegSize != null)
 
     private val depth = if (maxRes) 1 else 2
     private val jpegReader: ImageReader? = jpegSize?.let {
@@ -157,12 +165,15 @@ class StillPipeline(
             try {
                 val parts = mutableListOf<String>()
                 j.jpeg?.let {
-                    val uri = PhotoSaver.saveJpeg(ctx, it, j.base)
-                    if (uri != null) {
-                        val sw = if (maxRes) "ProShot FULL" else "ProShot"
-                        PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height))
+                    val processed = processJpeg && saveProcessed(it, j, result)
+                    if (!processed) {
+                        val uri = PhotoSaver.saveJpeg(ctx, it, j.base)
+                        if (uri != null) {
+                            val sw = if (maxRes) "ProShot FULL" else "ProShot"
+                            PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height))
+                        }
                     }
-                    parts += "JPEG"
+                    parts += if (processed) (if (superSample) "JPEG SR" else "JPEG+") else "JPEG"
                 }
                 j.raw?.let { PhotoSaver.saveDng(ctx, lens.chars, result, it, j.orientation, j.base); parts += "DNG" }
                 busy = false
@@ -174,6 +185,32 @@ class StillPipeline(
                 discard(j)
             }
         }
+    }
+
+    /**
+     * Decodes the camera JPEG (at half size when [superSample], which averages 2x2 pixels of the 50 MP
+     * frame), runs the detail library's finishing pass and saves the result. Returns false on any
+     * failure so the caller can save the untouched camera JPEG instead.
+     */
+    private fun saveProcessed(img: Image, j: Job, result: TotalCaptureResult): Boolean = try {
+        val buf = img.planes[0].buffer
+        val bytes = ByteArray(buf.remaining())
+        buf.get(bytes)
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = if (superSample) 2 else 1
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: error("decode failed")
+        val frame = YuvConvert.fromBitmap(bmp)
+        bmp.recycle()
+        val (post, optics) = LensProfiles.postFor(lens, frame.width, frame.height)
+        val finished = Finisher.run(frame, post)
+        val jpeg = YuvConvert.toJpeg(finished, 100)
+        val sw = (if (superSample) "ProShot SUPER 50>12MP" else "ProShot DETAIL") + (if (optics) " + optics" else "")
+        val meta = ShotMeta.from(lens, result, j.state, sw, finished.width, finished.height)
+        PhotoSaver.saveJpegBytes(ctx, jpeg, j.base, j.orientation, meta) != null
+    } catch (t: Throwable) {
+        false
     }
 
     private fun discard(j: Job) {
