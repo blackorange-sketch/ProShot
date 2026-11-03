@@ -7,9 +7,13 @@ import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Writes captured frames into DCIM/ProShot through MediaStore (no storage permission needed). */
 object PhotoSaver {
@@ -24,16 +28,54 @@ object PhotoSaver {
     }
 
     /** Saves an already encoded JPEG and stamps the EXIF orientation afterwards. */
-    fun saveJpegBytes(ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int): Uri? {
+    fun saveJpegBytes(
+        ctx: Context, bytes: ByteArray, baseName: String, jpegOrientation: Int, meta: ShotMeta? = null,
+    ): Uri? {
         val uri = write(ctx, "$baseName.jpg", "image/jpeg") { it.write(bytes) } ?: return null
+        stampExif(ctx, uri, meta, jpegOrientation)
+        return uri
+    }
+
+    /** Writes orientation and shooting data (device, lens, ISO, shutter, aperture, focal length) into the JPEG. */
+    fun stampExif(ctx: Context, uri: Uri, meta: ShotMeta?, jpegOrientation: Int? = null) {
         runCatching {
             ctx.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
                 val ex = ExifInterface(pfd.fileDescriptor)
-                ex.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation(jpegOrientation).toString())
+                if (jpegOrientation != null) {
+                    ex.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation(jpegOrientation).toString())
+                }
+                if (meta != null) {
+                    val now = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+                    ex.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
+                    ex.setAttribute(ExifInterface.TAG_MODEL, Build.MODEL)
+                    ex.setAttribute(ExifInterface.TAG_SOFTWARE, meta.software)
+                    ex.setAttribute(ExifInterface.TAG_DATETIME, now)
+                    ex.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, now)
+                    ex.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, now)
+                    meta.exposureNs?.let {
+                        ex.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, (it / 1e9).toString())
+                    }
+                    meta.iso?.let { ex.setAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, it.toString()) }
+                    meta.aperture?.let { ex.setAttribute(ExifInterface.TAG_F_NUMBER, it.toString()) }
+                    if (meta.focalMm > 0f) ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, meta.focalMm.toString())
+                    if (meta.lens.equivMm > 0) {
+                        ex.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, meta.lens.equivMm.toString())
+                    }
+                    ex.setAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE, meta.evComp.toString())
+                    ex.setAttribute(ExifInterface.TAG_FLASH, "0")
+                    ex.setAttribute(ExifInterface.TAG_WHITE_BALANCE, if (meta.wbAuto) "0" else "1")
+                    ex.setAttribute(ExifInterface.TAG_EXPOSURE_PROGRAM, "2")
+                    ex.setAttribute(ExifInterface.TAG_LENS_MAKE, Build.MANUFACTURER)
+                    ex.setAttribute(
+                        ExifInterface.TAG_LENS_MODEL,
+                        listOf(meta.lens.label, meta.lens.sensor).filter { it.isNotEmpty() }.joinToString(" "),
+                    )
+                    meta.width?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, it.toString()) }
+                    meta.height?.let { ex.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, it.toString()) }
+                }
                 ex.saveAttributes()
             }
         }
-        return uri
     }
 
     fun saveDng(

@@ -52,6 +52,8 @@ class StackPipeline(
     @Volatile private var expected = 0
     @Volatile private var orientation = 0
     @Volatile private var base = ""
+    @Volatile private var lastResult: TotalCaptureResult? = null
+    @Volatile private var shotState = ManualState()
 
     // Touched only on the io thread.
     private var stacker: FrameStacker? = null
@@ -94,6 +96,8 @@ class StackPipeline(
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         base = "PS_${stamp}_${lens.equivMm}mm_STACK"
         this.orientation = orientation
+        shotState = state
+        lastResult = null
         afterCapture = onExposed
         done = 0
         expected = frameCount
@@ -111,6 +115,7 @@ class StackPipeline(
             session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
         ) {
             result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { isoHint = it }
+            lastResult = result
             frameDone()
         }
 
@@ -170,9 +175,14 @@ class StackPipeline(
             val (post, optics) = LensProfiles.postFor(lens, merged.width, merged.height)
             val finished = Finisher.run(merged, post)
             val jpeg = YuvConvert.toJpeg(finished, 100)
-            PhotoSaver.saveJpegBytes(ctx, jpeg, base, orientation)
-            busy = false
             val engineName = if (StackerFactory.nativeAvailable) "C++" else "Kotlin"
+            val meta = ShotMeta.from(
+                lens, lastResult, shotState,
+                "ProShot STACK ${s.frames}x ($engineName${if (optics) " + optics" else ""})",
+                finished.width, finished.height,
+            )
+            PhotoSaver.saveJpegBytes(ctx, jpeg, base, orientation, meta)
+            busy = false
             onFinished("Збережено STACK ${s.frames}× ($engineName${if (optics) " + оптика" else ""}): $base", true)
         } catch (t: Throwable) {
             busy = false

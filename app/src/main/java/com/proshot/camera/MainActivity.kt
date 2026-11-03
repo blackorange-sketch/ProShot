@@ -389,8 +389,9 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             val sel = l === cur
             val tv = TextView(this).apply {
                 gravity = Gravity.CENTER
-                text = if (sel) "${zoomText(totalZoom)}×" else zoomText(ratioOf(l))
-                textSize = if (sel) 13f else 11f
+                text = lensText(l, sel)
+                textSize = if (sel) 12f else 11f
+                setLineSpacing(0f, 0.85f)
                 setTextColor(if (sel) Color.WHITE else 0xFFDDDDDD.toInt())
                 setBackgroundResource(if (sel) R.drawable.lens_selected else R.drawable.lens_dot)
                 setOnClickListener {
@@ -411,6 +412,13 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         }
     }
 
+    /** Stock-style label: focal length in mm; while digitally zoomed the selected dot shows the zoom instead. */
+    private fun lensText(l: Lens, sel: Boolean): String {
+        val mm = if (l.equivMm > 0) l.equivMm.toString() else "?"
+        if (!sel) return mm
+        return if (abs(totalZoom - ratioOf(l)) > 0.05f) "${zoomText(totalZoom)}×" else "$mm\nmm"
+    }
+
     /** Applies the part of [totalZoom] the current lens has to deliver digitally. */
     private fun applyDigital(l: Lens) {
         val z = (totalZoom / ratioOf(l)).coerceIn(1f, digitalMax(l))
@@ -418,7 +426,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
             ms = ms.copy(zoom = z)
             engine.update(ms)
         }
-        selLensView?.text = "${zoomText(totalZoom)}×"
+        selLensView?.text = lensText(l, true)
     }
 
     /** After a pinch: pick the lens whose own field of view is closest below the requested zoom. */

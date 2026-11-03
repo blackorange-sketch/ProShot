@@ -59,6 +59,7 @@ class StillPipeline(
         var jpeg: Image? = null
         var raw: Image? = null
         var result: TotalCaptureResult? = null
+        var state = ManualState()
     }
 
     private var job: Job? = null
@@ -112,7 +113,7 @@ class StillPipeline(
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        job = Job("PS_${stamp}_${lens.equivMm}mm", orientation)
+        job = Job("PS_${stamp}_${lens.equivMm}mm", orientation).also { it.state = state }
         busy = true
         session.capture(b.build(), callback, handler)
     }
@@ -155,7 +156,14 @@ class StillPipeline(
         io.execute {
             try {
                 val parts = mutableListOf<String>()
-                j.jpeg?.let { PhotoSaver.saveJpeg(ctx, it, j.base); parts += "JPEG" }
+                j.jpeg?.let {
+                    val uri = PhotoSaver.saveJpeg(ctx, it, j.base)
+                    if (uri != null) {
+                        val sw = if (maxRes) "ProShot FULL" else "ProShot"
+                        PhotoSaver.stampExif(ctx, uri, ShotMeta.from(lens, result, j.state, sw, it.width, it.height))
+                    }
+                    parts += "JPEG"
+                }
                 j.raw?.let { PhotoSaver.saveDng(ctx, lens.chars, result, it, j.orientation, j.base); parts += "DNG" }
                 busy = false
                 onFinished("Збережено ${parts.joinToString("+")}: ${j.base}", true)
