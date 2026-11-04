@@ -442,7 +442,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 text = lensText(l, sel)
                 textSize = if (sel) 12f else 11f
                 setLineSpacing(0f, 0.85f)
-                setTextColor(if (sel) Color.WHITE else 0xFFDDDDDD.toInt())
+                setTextColor(if (sel) 0xFFFFD54F.toInt() else 0xFFDDDDDD.toInt())
                 setBackgroundResource(if (sel) R.drawable.lens_selected else R.drawable.lens_dot)
                 setOnClickListener {
                     if (sel) {
@@ -692,7 +692,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
         val mode = currentMode()
         modes.forEachIndexed { i, tv ->
             val on = i == mode
-            val to = if (on) 0xFFFF3B30.toInt() else Color.WHITE
+            val to = if (on) 0xFFFFD54F.toInt() else 0xFFB8B8BD.toInt()
             val from = tv.currentTextColor
             if (from != to) {
                 android.animation.ValueAnimator.ofObject(android.animation.ArgbEvaluator(), from, to).apply {
@@ -702,6 +702,7 @@ class MainActivity : AppCompatActivity(), CameraEngine.Listener {
                 }
             }
             tv.paint.isFakeBoldText = on
+            tv.setBackgroundResource(if (on) R.drawable.mode_pill else 0)
             tv.animate().scaleX(if (on) 1.12f else 1f).scaleY(if (on) 1.12f else 1f).setDuration(180).start()
             tv.invalidate()
         }
